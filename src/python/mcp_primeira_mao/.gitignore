@@ -1,0 +1,56 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Ambientes Virtuais ---
+.venv/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Configurações e Segredos (CRÍTICO) ---
+.env
+.env.local
+.env.sample
+# Não ignore o .env.example, ele serve de guia para outros devs
+!.env.example
+
+# --- Docker ---
+.dockerignore
+# Se você gera logs de containers localmente
+*.log
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Banco de Dados ---
+*.sqlite3
+*.db
+# Backups de dump do postgres se você fizer local
+*.sql
+
+# --- MCP & Temporary ---
+.mcp/
