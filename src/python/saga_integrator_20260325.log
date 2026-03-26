@@ -1,7 +1,0 @@
-2026-03-25 16:24:52 [INFO] Inicializando SagaIntegrator...
-2026-03-25 16:24:52 [INFO] Configuração carregada:
-2026-03-25 16:24:52 [INFO] Testando conexão com o banco de dados...
-2026-03-25 16:25:13 [ERROR] Falha na conexão com o banco: connection to server at "ec2-54-208-92-156.compute-1.amazonaws.com" (54.208.92.156), port 5435 failed: Connection timed out (0x0000274C/10060)
-	Is the server running on that host and accepting TCP/IP connections?
-
-2026-03-25 16:25:13 [CRITICAL] Abortando execução — banco de dados inacessível.

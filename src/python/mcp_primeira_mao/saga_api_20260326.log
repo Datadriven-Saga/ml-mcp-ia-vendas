@@ -1,0 +1,33 @@
+2026-03-26 09:52:20,143 [INFO] HTTP Request: GET https://pypi.org/pypi/fastmcp/json "HTTP/1.1 200 OK"
+2026-03-26 09:52:54,597 [INFO] Processing request of type ListToolsRequest
+2026-03-26 09:53:22,468 [INFO] Processing request of type CallToolRequest
+2026-03-26 09:53:43,553 [ERROR] Erro ao consultar Postgres: connection to server at "ec2-54-208-92-156.compute-1.amazonaws.com" (54.208.92.156), port 5435 failed: Connection timed out (0x0000274C/10060)
+	Is the server running on that host and accepting TCP/IP connections?
+
+2026-03-26 09:57:33,073 [INFO] Processing request of type CallToolRequest
+2026-03-26 09:57:34,566 [INFO] HTTP Request: GET https://5od930jj0c.execute-api.us-east-1.amazonaws.com/dev/mobitoken?secret=AA22JQ662AYSOX1OPX90MPLRFA9TYM2SH9PV0W39SYDFJ6LFP5VT6JGH37L4MRV0 "HTTP/1.1 200 OK"
+2026-03-26 09:57:36,359 [INFO] HTTP Request: GET https://open-api.mobiauto.com.br/api/dealer/18407/inventory/v1.0 "HTTP/1.1 200 OK"
+2026-03-26 10:00:12,522 [INFO] Processing request of type CallToolRequest
+2026-03-26 10:00:14,115 [INFO] HTTP Request: GET https://5od930jj0c.execute-api.us-east-1.amazonaws.com/dev/mobitoken?secret=AA22JQ662AYSOX1OPX90MPLRFA9TYM2SH9PV0W39SYDFJ6LFP5VT6JGH37L4MRV0 "HTTP/1.1 200 OK"
+2026-03-26 10:00:14,723 [INFO] HTTP Request: GET https://open-api.mobiauto.com.br/api/dealer//inventory/v1.0 "HTTP/1.1 404 Not Found"
+2026-03-26 10:00:14,727 [ERROR] Erro ao buscar estoque do dealer : Client error '404 Not Found' for url 'https://open-api.mobiauto.com.br/api/dealer//inventory/v1.0'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-03-26 10:00:31,225 [INFO] Processing request of type CallToolRequest
+2026-03-26 10:00:32,473 [INFO] HTTP Request: GET https://5od930jj0c.execute-api.us-east-1.amazonaws.com/dev/mobitoken?secret=AA22JQ662AYSOX1OPX90MPLRFA9TYM2SH9PV0W39SYDFJ6LFP5VT6JGH37L4MRV0 "HTTP/1.1 200 OK"
+2026-03-26 10:00:34,047 [INFO] HTTP Request: GET https://open-api.mobiauto.com.br/api/dealer/18407/inventory/v1.0 "HTTP/1.1 200 OK"
+2026-03-26 10:01:06,941 [INFO] Processing request of type CallToolRequest
+2026-03-26 10:01:08,125 [INFO] HTTP Request: GET https://5od930jj0c.execute-api.us-east-1.amazonaws.com/dev/mobitoken?secret=AA22JQ662AYSOX1OPX90MPLRFA9TYM2SH9PV0W39SYDFJ6LFP5VT6JGH37L4MRV0 "HTTP/1.1 200 OK"
+2026-03-26 10:01:09,266 [INFO] HTTP Request: GET https://open-api.mobiauto.com.br/api/dealer/18407/inventory/v1.0 "HTTP/1.1 200 OK"
+2026-03-26 10:03:21,932 [INFO] Processing request of type CallToolRequest
+2026-03-26 10:03:23,510 [INFO] HTTP Request: GET https://5od930jj0c.execute-api.us-east-1.amazonaws.com/dev/mobitoken?secret=AA22JQ662AYSOX1OPX90MPLRFA9TYM2SH9PV0W39SYDFJ6LFP5VT6JGH37L4MRV0 "HTTP/1.1 200 OK"
+2026-03-26 10:03:24,423 [INFO] HTTP Request: GET https://open-api.mobiauto.com.br/api/dealer/18407/inventory/v1.0 "HTTP/1.1 200 OK"
+2026-03-26 10:35:43,995 [INFO] Processing request of type ListResourceTemplatesRequest
+2026-03-26 10:35:45,762 [INFO] Processing request of type ListResourcesRequest
+2026-03-26 10:35:53,899 [INFO] Processing request of type ListToolsRequest
+2026-03-26 10:37:00,680 [INFO] Processing request of type CallToolRequest
+2026-03-26 10:37:02,376 [INFO] HTTP Request: GET https://5od930jj0c.execute-api.us-east-1.amazonaws.com/dev/mobitoken?secret=AA22JQ662AYSOX1OPX90MPLRFA9TYM2SH9PV0W39SYDFJ6LFP5VT6JGH37L4MRV0 "HTTP/1.1 200 OK"
+2026-03-26 10:37:04,612 [INFO] HTTP Request: GET https://open-api.mobiauto.com.br/api/dealer/18363/inventory/v1.0 "HTTP/1.1 200 OK"
+2026-03-26 10:39:35,034 [INFO] Processing request of type CallToolRequest
+2026-03-26 10:39:56,095 [ERROR] Erro ao consultar Postgres: connection to server at "ec2-54-208-92-156.compute-1.amazonaws.com" (54.208.92.156), port 5435 failed: Connection timed out (0x0000274C/10060)
+	Is the server running on that host and accepting TCP/IP connections?
+
