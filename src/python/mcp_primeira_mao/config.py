@@ -24,7 +24,6 @@ URL_AWS_TOKEN = os.getenv("URL_AWS_TOKEN")
 # API de Precificação
 PRECIFICACAO_API_URL = os.getenv("PRECIFICACAO_API_URL")
 
-# Configuração do MCP (Padrão: stdio para o Inspector)
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio").lower()
 
 TIMEOUT = int(os.getenv("API_TIMEOUT", 20))
