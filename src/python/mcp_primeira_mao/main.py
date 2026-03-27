@@ -113,5 +113,4 @@ if __name__ == "__main__":
         logger.info(f"Iniciando MCP em modo SSE na porta {port}")
         mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
-        # Modo padrão stdio (para uso com Claude Desktop ou MCP Inspector local)
         mcp.run(transport="stdio")
