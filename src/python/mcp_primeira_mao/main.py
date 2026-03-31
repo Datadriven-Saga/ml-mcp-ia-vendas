@@ -10,13 +10,6 @@ from config import logger
 
 mcp = FastMCP("PrimeiraMaoSaga")
 
-CSP_POLICY = (
-    "default-src 'self'; "
-    "img-src 'self' data: https://*.mobiauto.com.br; "
-    "frame-ancestors 'none'; "
-    "upgrade-insecure-requests;"
-)
-
 @mcp.tool()
 async def listar_lojas():
     """Lista as lojas configuradas no banco de dados ou no arquivo de fallback (lojas_mock.csv)."""
@@ -37,7 +30,7 @@ async def search_veiculos(
     Busca inteligente no estoque. Todos os campos são opcionais.
     Resolve erros de validação permitindo valores nulos da interface.
     """
-    estoque = await InventoryAggregator.buscar_estoque_consolidated()
+    estoque = await InventoryAggregator.buscar_estoque_consolidado()
     
     if marca is None and modelo is None and preco_max is None:
         return estoque[:20]
@@ -98,18 +91,7 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
     
     if transport == "sse":
-        from starlette.middleware.base import BaseHTTPMiddleware
-        
-        class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request, call_next):
-                response = await call_next(request)
-                response.headers["Content-Security-Policy"] = CSP_POLICY
-                response.headers["X-Frame-Options"] = "DENY"
-                response.headers["X-Content-Type-Options"] = "nosniff"
-                response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-                return response
-
-        port = int(os.getenv("PORT", 8080))
+        port = int(os.getenv("PORT", 8000))
         logger.info(f"Iniciando MCP em modo SSE na porta {port}")
         mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
