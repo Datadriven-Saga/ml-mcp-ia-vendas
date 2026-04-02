@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  mcp-primeira-mao:
+    image: mcpprimeiramao:v1
+    networks:
+      - network_public
+    environment:
+      # Transporte e porta interna
+      - MCP_TRANSPORT=sse
+      - PORT=8000
+      # Banco de Dados — TODOS obrigatórios
+      - DB_HOST=${DB_HOST}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_PORT=${DB_PORT:-5432}      # padrão postgres; ajuste se usar 5435
+      # Integrações externas
+      - MOBI_SECRET=${MOBI_SECRET}
+      - URL_AWS_TOKEN=${URL_AWS_TOKEN}
+      - PRECIFICACAO_API_URL=${PRECIFICACAO_API_URL}
+      - API_TIMEOUT=${API_TIMEOUT:-20}
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          # Fixe no node onde a imagem foi construída.
+          # Descubra o hostname na aba "Nodes" do Portainer e substitua abaixo.
+          - node.hostname == NOME_DO_NODE
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        # --- Roteamento básico ---
+        - "traefik.enable=true"
+        - "traefik.http.routers.mcp-saga.rule=Host(`mcp-saga.seudominio.com.br`)"
+        - "traefik.http.routers.mcp-saga.entrypoints=websecure"
+        - "traefik.http.routers.mcp-saga.tls=true"
+        - "traefik.http.routers.mcp-saga.tls.certresolver=letsencrypt"
+        - "traefik.http.services.mcp-saga.loadbalancer.server.port=8000"
+
+        # --- Encadeia o middleware de segurança ---
+        - "traefik.http.routers.mcp-saga.middlewares=mcp-saga-headers@docker"
+
+        # --- Middleware: Security Headers (substitui o código Python removido) ---
+        - "traefik.http.middlewares.mcp-saga-headers.headers.contentSecurityPolicy=default-src 'self'; img-src 'self' data: https://*.mobiauto.com.br; frame-ancestors 'none'; upgrade-insecure-requests;"
+        - "traefik.http.middlewares.mcp-saga-headers.headers.frameDeny=true"
+        - "traefik.http.middlewares.mcp-saga-headers.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.mcp-saga-headers.headers.stsSeconds=31536000"
+        - "traefik.http.middlewares.mcp-saga-headers.headers.stsIncludeSubdomains=true"
+        - "traefik.http.middlewares.mcp-saga-headers.headers.forceSTSHeader=true"
+
+networks:
+  network_public:
+    external: true
