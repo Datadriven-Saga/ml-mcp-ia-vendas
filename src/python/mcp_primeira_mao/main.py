@@ -118,6 +118,63 @@ async def avaliar_veiculo(
     # Passo 3: chama a API de precificação
     return await PricingService.calcular_compra(dados)
 
+@mcp.tool()
+async def contato_compra(
+    id_veiculo: Optional[str] = None,
+    marca: Optional[str] = None,
+    versao: Optional[str] = None,
+):
+    """
+    Gera o link direto para o cliente visualizar o veículo de interesse no site da Primeira Mão Saga (grade de ofertas).
+
+    Use esta ferramenta após identificar o veículo desejado pelo cliente via search_veiculos ou fetch_veiculo_detalhado.
+    Passe o 'id' do veículo (campo 'id' do estoque), a 'marca' (campo 'makeName') e a 'versao' (campo 'trimName').
+
+    Se os dados forem suficientes, retorna a URL filtrada diretamente na página do veículo.
+    Caso contrário, retorna o link da grade de ofertas como fallback.
+    """
+    BASE_URL = "https://www.primeiramaosaga.com.br/gradedeofertas"
+
+    if id_veiculo and marca and versao:
+        slug = f"{marca}-{versao}".replace(" ", "-")
+        url = f"{BASE_URL}/{slug}/detalhes/{id_veiculo}"
+        return {
+            "url": url,
+            "mensagem": (
+                f"Ótimo! Encontrei o veículo para você. Acesse o link abaixo para ver todos os detalhes, "
+                f"fotos e entrar em contato com nossa equipe:\n\n{url}"
+            ),
+            "tipo": "url_filtrada",
+        }
+
+    return {
+        "url": BASE_URL,
+        "mensagem": (
+            f"Acesse nossa grade completa de ofertas e encontre o veículo ideal para você:\n\n{BASE_URL}"
+        ),
+        "tipo": "url_base",
+    }
+
+
+@mcp.tool()
+async def contato_venda():
+    """
+    Retorna o link para o cliente dar continuidade à venda/avaliação do veículo no site da Primeira Mão Saga.
+
+    Use esta ferramenta APÓS concluir a avaliação com a tool 'avaliar_veiculo', para direcionar o cliente
+    à página de avaliação online onde ele pode finalizar o processo de venda.
+    """
+    URL_VENDA = "https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente"
+
+    return {
+        "url": URL_VENDA,
+        "mensagem": (
+            "Sua avaliação está pronta! Para dar continuidade e formalizar a venda do seu veículo, "
+            f"acesse o link abaixo e preencha seus dados:\n\n{URL_VENDA}"
+        ),
+    }
+
+
 if __name__ == "__main__":
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     
