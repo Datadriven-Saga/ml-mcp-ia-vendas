@@ -10,6 +10,7 @@ if _HERE not in sys.path:
 import re
 from typing import Optional
 from fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from services.inventory_aggregator import InventoryAggregator
 from services.fipe_service import FipeService
 from services.pricing_service import PricingService
@@ -115,7 +116,7 @@ Regras:
 # TOOLS
 # ─────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False))
 async def listar_lojas():
     """
     Lista todas as lojas Primeira Mão Saga cadastradas com nome, cidade e UF.
@@ -139,7 +140,7 @@ async def listar_lojas():
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 async def estoque_total(pagina: Optional[int] = 1):
     """
     Exibe o estoque de veículos disponíveis nas lojas Primeira Mão Saga, 3 lojas por vez.
@@ -201,7 +202,7 @@ async def estoque_total(pagina: Optional[int] = 1):
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 async def buscar_veiculo(consulta: Optional[str] = None):
     """
     Busca curinga: encontra veículos a partir de qualquer descrição em linguagem natural.
@@ -325,7 +326,7 @@ async def _buscar_fipe(placa_limpa: str) -> dict:
 # TOOL: AVALIAÇÃO DE VEÍCULO DO CLIENTE (com botão de venda embutido)
 # ─────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 async def avaliar_veiculo(
     placa: str,
     km: str,
@@ -440,8 +441,31 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
 
     if transport == "sse":
+        import uvicorn
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route, Mount
+
         port = int(os.getenv("PORT", 8000))
+
+        # Token de verificação do domínio para ChatGPT Apps (OpenAI)
+        # Definido em .env → OPENAI_CHALLENGE_TOKEN
+        openai_token = os.getenv("OPENAI_CHALLENGE_TOKEN", "")
+
+        async def _openai_challenge(_request):
+            """Endpoint de verificação de domínio exigido pelo ChatGPT Apps."""
+            return PlainTextResponse(openai_token)
+
+        # Obtém o app ASGI do FastMCP e adiciona a rota well-known na frente
+        mcp_asgi = mcp.http_app(transport="sse")
+
+        app = Starlette(routes=[
+            Route("/.well-known/openai-apps-challenge", endpoint=_openai_challenge),
+            Mount("/", app=mcp_asgi),
+        ])
+
         logger.info(f"Iniciando MCP em modo SSE na porta {port}")
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        logger.info(f"Rota de verificação OpenAI: /.well-known/openai-apps-challenge")
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run(transport="stdio")
