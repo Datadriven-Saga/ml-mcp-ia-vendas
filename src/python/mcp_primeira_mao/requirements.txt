@@ -1,7 +1,5 @@
 # Servidor MCP
-fastmcp>=0.4.1
-uvicorn>=0.23.0
-starlette>=0.27.0
+fastmcp==3.2.2
 
 # Banco de Dados
 psycopg2-binary>=2.9.9
@@ -10,9 +8,8 @@ pandas>=2.0.0
 # Integrações e Utils
 httpx>=0.25.0
 python-dotenv>=1.0.0
-
-# Opcional: para facilitar o desenvolvimento
 pydantic>=2.0.0
 
+# Testes
 pytest
 pytest-asyncio
