@@ -20,6 +20,8 @@ services:
       - URL_AWS_TOKEN=${URL_AWS_TOKEN}
       - PRECIFICACAO_API_URL=${PRECIFICACAO_API_URL}
       - API_TIMEOUT=${API_TIMEOUT:-20}
+      # ChatGPT Apps — verificação de domínio OpenAI
+      - OPENAI_CHALLENGE_TOKEN=${OPENAI_CHALLENGE_TOKEN}
     deploy:
       replicas: 1
       placement:

@@ -11,6 +11,8 @@ import re
 from typing import Optional
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 from services.inventory_aggregator import InventoryAggregator
 from services.fipe_service import FipeService
 from services.pricing_service import PricingService
@@ -18,6 +20,14 @@ from utils.helpers import normalizar_placa
 from config import logger
 
 mcp = FastMCP("PrimeiraMaoSaga")
+
+# ── Verificação de domínio para ChatGPT Apps (OpenAI) ──────────────
+# Token configurado em .env → OPENAI_CHALLENGE_TOKEN
+@mcp.custom_route("/.well-known/openai-apps-challenge", methods=["GET"])
+async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
+    token = os.getenv("OPENAI_CHALLENGE_TOKEN", "")
+    logger.info("[openai-challenge] Verificação de domínio solicitada")
+    return PlainTextResponse(token)
 
 # ─────────────────────────────────────────────────────────────
 # INSTRUÇÃO GLOBAL DE RENDERIZAÇÃO DE CARDS DE VEÍCULOS
@@ -441,31 +451,8 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
 
     if transport == "sse":
-        import uvicorn
-        from starlette.applications import Starlette
-        from starlette.responses import PlainTextResponse
-        from starlette.routing import Route, Mount
-
         port = int(os.getenv("PORT", 8000))
-
-        # Token de verificação do domínio para ChatGPT Apps (OpenAI)
-        # Definido em .env → OPENAI_CHALLENGE_TOKEN
-        openai_token = os.getenv("OPENAI_CHALLENGE_TOKEN", "")
-
-        async def _openai_challenge(_request):
-            """Endpoint de verificação de domínio exigido pelo ChatGPT Apps."""
-            return PlainTextResponse(openai_token)
-
-        # Obtém o app ASGI do FastMCP e adiciona a rota well-known na frente
-        mcp_asgi = mcp.http_app(transport="sse")
-
-        app = Starlette(routes=[
-            Route("/.well-known/openai-apps-challenge", endpoint=_openai_challenge),
-            Mount("/", app=mcp_asgi),
-        ])
-
         logger.info(f"Iniciando MCP em modo SSE na porta {port}")
-        logger.info(f"Rota de verificação OpenAI: /.well-known/openai-apps-challenge")
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
         mcp.run(transport="stdio")
