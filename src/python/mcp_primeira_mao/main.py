@@ -29,16 +29,17 @@ _WH_VENDA  = "https://automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_
 async def _disparar_webhook(url: str, payload: dict, nome: str) -> bool:
     """Envia POST para o webhook interno. Aguarda confirmação antes de retornar."""
     payload_limpo = {k: v for k, v in payload.items() if v not in (None, "", [])}
+    logger.info(f"[webhook.{nome}] >>> DISPARANDO | url={url} | campos={list(payload_limpo.keys())}")
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(url, json=payload_limpo)
             if resp.is_success:
-                logger.info(f"[webhook.{nome}] Enviado | status={resp.status_code} | campos={list(payload_limpo.keys())}")
+                logger.info(f"[webhook.{nome}] <<< OK | status={resp.status_code}")
                 return True
-            logger.warning(f"[webhook.{nome}] Resposta inesperada | status={resp.status_code} | body={resp.text[:200]}")
+            logger.warning(f"[webhook.{nome}] <<< FALHOU | status={resp.status_code} | body={resp.text[:300]}")
             return False
     except Exception as e:
-        logger.error(f"[webhook.{nome}] Falha ao enviar | {type(e).__name__}: {e}")
+        logger.error(f"[webhook.{nome}] <<< ERRO | {type(e).__name__}: {e}")
         return False
 
 mcp = FastMCP("PrimeiraMaoSaga")
@@ -297,14 +298,16 @@ async def _criar_lead_compra(
         "observacao":       observacao,
     }, "cliente_quer_comprar")
 
-    logger.info(f"[_criar_lead_compra] Concluído | success={resultado.get('success')} | dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}'")
+    status_log = "OK" if resultado.get("success") else "FALHOU"
+    logger.warning(f"[_criar_lead_compra] <<< {status_log} | dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}' | erro={resultado.get('error', '-')}")
     return {
         "registrado":   resultado.get("success", False),
         "dealer_id":    resultado.get("dealer_id"),
         "fallback_url": "https://www.primeiramaosaga.com.br/gradedeofertas",
         "mensagem": (
-            f"Pronto, {nome_cliente}! Um consultor da Saga entrará em contato com você em breve via WhatsApp. "
-            f"Fique atento ao número informado."
+            f"Pronto, {nome_cliente}! Em breve um consultor da Saga entrará em contato com você via WhatsApp. "
+            f"Enquanto isso, fique à vontade para ver a oferta no site: "
+            f"https://www.primeiramaosaga.com.br/gradedeofertas"
             if resultado.get("success") else
             f"Não foi possível registrar agora: {resultado.get('error', 'erro desconhecido')}. "
             "Acesse o site como alternativa."
@@ -368,7 +371,8 @@ async def _criar_lead_venda(
         "observacao":        observacao,
     }, "cliente_quer_vender")
 
-    logger.info(f"[_criar_lead_venda] Concluído | success={resultado.get('success')} | dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}'")
+    status_log = "OK" if resultado.get("success") else "FALHOU"
+    logger.warning(f"[_criar_lead_venda] <<< {status_log} | dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}' | erro={resultado.get('error', '-')}")
     return {
         "registrado":   resultado.get("success", False),
         "dealer_id":    resultado.get("dealer_id"),
@@ -428,10 +432,11 @@ async def estoque_total(cidade: Optional[str] = None):
     incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
     NÃO reformate e NÃO adicione texto próprio.
 
-    Após exibir: o cliente pode informar nome e telefone para falar com um consultor.
-    O CONSULTOR ENTRA EM CONTATO COM O CLIENTE — deixe isso claro.
-    Quando o cliente informar, chame `registrar_interesse_compra` com nome_cliente,
-    telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
+    Após exibir: aguarde o cliente informar nome e telefone.
+    QUANDO O CLIENTE FORNECER NOME E TELEFONE: chame IMEDIATAMENTE `registrar_interesse_compra`
+    com nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
+    NÃO mostre link, NÃO resuma os dados recebidos, NÃO peça confirmação — chame a ferramenta.
+    O consultor entra em contato via WhatsApp — NÃO é o cliente que liga.
     """
     if not cidade or not cidade.strip():
         return (
@@ -492,10 +497,11 @@ async def buscar_veiculo(
     incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
     NÃO reformate e NÃO adicione texto próprio.
 
-    Após exibir: o cliente pode informar nome e telefone para falar com um consultor.
-    O CONSULTOR ENTRA EM CONTATO COM O CLIENTE — deixe isso claro.
-    Quando o cliente informar, chame `registrar_interesse_compra` com nome_cliente,
-    telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
+    Após exibir: aguarde o cliente informar nome e telefone.
+    QUANDO O CLIENTE FORNECER NOME E TELEFONE: chame IMEDIATAMENTE `registrar_interesse_compra`
+    com nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
+    NÃO mostre link, NÃO resuma os dados recebidos, NÃO peça confirmação — chame a ferramenta.
+    O consultor entra em contato via WhatsApp — NÃO é o cliente que liga.
     """
     if not consulta or not consulta.strip():
         return await estoque_total(cidade=cidade)
@@ -614,10 +620,11 @@ async def avaliar_veiculo(
     EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra.
     NÃO adicione texto próprio.
 
-    Após exibir: o cliente pode informar nome e telefone para falar com um consultor.
-    O CONSULTOR ENTRA EM CONTATO COM O CLIENTE — deixe isso claro.
-    Quando o cliente informar, chame `registrar_interesse_venda` com nome_cliente,
-    telefone_cliente, placa, km e veiculo_descricao (ex: "Honda Civic 2021").
+    Após exibir: aguarde o cliente informar nome e telefone.
+    QUANDO O CLIENTE FORNECER NOME E TELEFONE: chame IMEDIATAMENTE `registrar_interesse_venda`
+    com nome_cliente, telefone_cliente, placa, km e veiculo_descricao.
+    NÃO mostre link, NÃO resuma os dados recebidos, NÃO peça confirmação — chame a ferramenta.
+    O consultor entra em contato via WhatsApp — NÃO é o cliente que liga.
     Se o cliente recusar → encerre sem chamar nenhuma ferramenta.
     """
     placa_limpa = normalizar_placa(placa)
@@ -721,18 +728,19 @@ async def registrar_interesse_compra(
     observacao: Optional[str] = None,
 ):
     """
-    Registra o interesse de compra do cliente. Um consultor da Saga entrará em contato
-    com o cliente pelo telefone informado — NÃO é o cliente que liga para a loja.
+    CHAME ESTA FERRAMENTA IMEDIATAMENTE quando o cliente fornecer nome e telefone
+    após ver os cards de veículos. NÃO mostre link nem resuma — chame direto.
 
-    Use quando o cliente informar nome e telefone após ver os cards de veículos.
+    Um consultor da Saga entrará em contato com o cliente via WhatsApp.
+    NÃO é o cliente que liga — é o consultor que entra em contato.
 
-    Campos obrigatórios: nome_cliente e telefone_cliente.
-    Passe titulo_veiculo, loja_unidade e preco_formatado se souber — melhora o lead.
+    Obrigatórios: nome_cliente e telefone_cliente.
+    Opcionais (melhora o lead): titulo_veiculo, loja_unidade, preco_formatado.
 
-    Após chamar: exiba o campo `mensagem` ao cliente (confirma que o consultor ligará).
+    Após chamar: exiba APENAS o campo `mensagem` retornado.
     Se registrado=false, exiba o link `fallback_url` como alternativa.
     """
-    logger.info(f"[registrar_interesse_compra] cliente='{nome_cliente}' | veiculo='{titulo_veiculo}' | loja='{loja_unidade}'")
+    logger.warning(f"[registrar_interesse_compra] >>> TOOL CHAMADA | cliente='{nome_cliente}' | tel='{telefone_cliente}' | veiculo='{titulo_veiculo}' | loja='{loja_unidade}'")
     return await _criar_lead_compra(
         nome_cliente=nome_cliente,
         telefone_cliente=telefone_cliente,
@@ -757,18 +765,19 @@ async def registrar_interesse_venda(
     observacao: Optional[str] = None,
 ):
     """
-    Registra o interesse de venda ou troca do veículo do cliente. Um consultor da Saga
-    entrará em contato com o cliente pelo telefone informado — NÃO é o cliente que liga.
+    CHAME ESTA FERRAMENTA IMEDIATAMENTE quando o cliente fornecer nome e telefone
+    após ver a proposta de avaliar_veiculo. NÃO mostre link nem resuma — chame direto.
 
-    Use quando o cliente informar nome e telefone após ver a proposta de avaliar_veiculo.
+    Um consultor da Saga entrará em contato com o cliente via WhatsApp.
+    NÃO é o cliente que liga — é o consultor que entra em contato.
 
-    Campos obrigatórios: nome_cliente e telefone_cliente.
-    Passe placa, km e veiculo_descricao se disponíveis — melhora o lead.
+    Obrigatórios: nome_cliente e telefone_cliente.
+    Opcionais (melhora o lead): placa, km, veiculo_descricao.
 
-    Após chamar: exiba o campo `mensagem` ao cliente (confirma que o consultor ligará).
+    Após chamar: exiba APENAS o campo `mensagem` retornado.
     Se registrado=false, exiba o link `fallback_url` como alternativa.
     """
-    logger.info(f"[registrar_interesse_venda] cliente='{nome_cliente}' | placa={placa} | km={km} | veiculo='{veiculo_descricao}'")
+    logger.warning(f"[registrar_interesse_venda] >>> TOOL CHAMADA | cliente='{nome_cliente}' | tel='{telefone_cliente}' | placa={placa} | km={km} | veiculo='{veiculo_descricao}'")
     return await _criar_lead_venda(
         nome_cliente=nome_cliente,
         telefone_cliente=telefone_cliente,
