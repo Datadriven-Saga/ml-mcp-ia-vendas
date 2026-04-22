@@ -50,7 +50,7 @@ mcp = FastMCP("PrimeiraMaoSaga")
 async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
     token = os.getenv("OPENAI_CHALLENGE_TOKEN", "")
     logger.info(f"[openai-challenge] Verificação de domínio solicitada | token_configurado={bool(token)}")
-    return PlainTextResponse(f"openai-domain-verification={token}")
+    return PlainTextResponse(token)
 
 # ─────────────────────────────────────────────────────────────
 # INSTRUÇÃO GLOBAL DE RENDERIZAÇÃO DE CARDS DE VEÍCULOS
