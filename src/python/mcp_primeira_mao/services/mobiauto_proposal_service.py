@@ -11,8 +11,8 @@ import httpx
 from config import logger
 
 PROPOSAL_BASE_URL = "https://open-api.mobiauto.com.br/api/proposal/v1.0"
-PROPOSAL_TIMEOUT  = 15
-GROUP_ID          = "948"
+PROPOSAL_TIMEOUT  = 10  # reduzido para caber dentro do timeout do widget (15s)
+GROUP_ID          = 948  # int — a API espera número, não string
 
 # Provider para fluxo de COMPRA (cliente quer comprar da Saga)
 _PROVIDER_BUY = {
@@ -130,69 +130,119 @@ class MobiautoProposalService:
             logger.error("[MobiautoProposalService] Nenhum dealer_id disponível — sem lojas carregadas")
             return {"success": False, "error": "Nenhum dealer_id disponível"}
 
+        # 4. Normaliza telefone — remove tudo que não for dígito
+        #    O widget envia com máscara "(62) 99399-4629"; a API espera só dígitos.
+        telefone_digits = "".join(c for c in telefone if c.isdigit())
+
         logger.info(
             f"[MobiautoProposalService] dealer_id={dealer_id} | origem={dealer_origem} | "
-            f"type={intention_type} | cliente='{nome}' | tel='{telefone}'"
+            f"type={intention_type} | cliente='{nome}' | tel='{telefone}' | tel_digits='{telefone_digits}'"
         )
 
-        # 4. Monta body
+        # Monta body — tipos corretos: groupId e departmentId são inteiros
         provider = _PROVIDER_BUY if intention_type == "BUY" else _PROVIDER_SELL
         body = {
             "callcenter":    True,
             "intentionType": intention_type,
             "user": {
-                "email":        email or " ",
+                "email":        email or "",
                 "dealerId":     dealer_id,
                 "name":         nome,
-                "phone":        telefone,
-                "departmentId": "0",
+                "phone":        telefone_digits,
+                "departmentId": 0,
             },
-            "message":  mensagem or "",
+            "message":  (mensagem or "")[:500],
             "origin":   1,
             "whatsapp": False,
             "provider": provider,
             "status":   "NEW",
             "groupId":  GROUP_ID,
-            "tags":     [f"MCP_{'Compra' if intention_type == 'BUY' else 'Venda'}"],
         }
 
-        # 5. POST na API
+        # 5. POST na API com estratégia de fallback progressiva
         url = f"{PROPOSAL_BASE_URL}/{dealer_id}"
-        logger.info(f"[MobiautoProposalService] POST {url}")
+        logger.info(f"[MobiautoProposalService] POST {url} | type={intention_type}")
+
+        # Token atual (pode ser renovado abaixo se receber 401)
+        _current_token = token
+
+        async def _post(payload: dict, tok: str):
+            try:
+                async with httpx.AsyncClient(timeout=PROPOSAL_TIMEOUT) as client:
+                    return await client.post(
+                        url,
+                        json=payload,
+                        headers={"Authorization": f"Bearer {tok}"},
+                    )
+            except httpx.ReadTimeout:
+                return None
+            except Exception as exc:
+                logger.error(f"[MobiautoProposalService] _post exception | {type(exc).__name__}: {exc}")
+                return None
 
         try:
-            async with httpx.AsyncClient(timeout=PROPOSAL_TIMEOUT) as client:
-                resp = await client.post(
-                    url,
-                    json=body,
-                    headers={"Authorization": f"Bearer {token}"},
+            resp = await _post(body, _current_token)
+
+            if resp is None:
+                logger.error(f"[MobiautoProposalService] Timeout ({PROPOSAL_TIMEOUT}s) | dealer_id={dealer_id}")
+                return {"success": False, "error": f"Timeout após {PROPOSAL_TIMEOUT}s"}
+
+            # 401 → renova token e tenta uma vez mais
+            if resp.status_code == 401:
+                logger.warning(f"[MobiautoProposalService] 401 — token expirado, renovando...")
+                MobiautoService._token_cache = None
+                _current_token = await MobiautoService.get_token(force_refresh=True)
+                if _current_token:
+                    resp = await _post(body, _current_token)
+                    if resp is None:
+                        return {"success": False, "error": f"Timeout após {PROPOSAL_TIMEOUT}s"}
+
+            # SELL falhou com 4xx → tenta com provider BUY
+            if resp and not resp.is_success and 400 <= resp.status_code < 500 and intention_type == "SELL":
+                logger.warning(
+                    f"[MobiautoProposalService] SELL provider falhou HTTP {resp.status_code} | "
+                    f"body={resp.text[:300]} — tentando provider BUY"
                 )
+                body_sell_fallback = dict(body)
+                body_sell_fallback["provider"] = _PROVIDER_BUY
+                resp = await _post(body_sell_fallback, _current_token)
+                if resp is None:
+                    return {"success": False, "error": f"Timeout após {PROPOSAL_TIMEOUT}s"}
 
-                if resp.is_success:
-                    try:
-                        body = resp.json()
-                    except Exception:
-                        body = resp.text
-                    logger.info(
-                        f"[MobiautoProposalService] Lead criado | status={resp.status_code} | "
-                        f"dealer_id={dealer_id} | type={intention_type} | response={body}"
-                    )
-                    return {"success": True, "status_code": resp.status_code, "dealer_id": dealer_id, "response": body}
-
-                logger.error(
-                    f"[MobiautoProposalService] HTTP {resp.status_code} | "
-                    f"body={resp.text[:400]}"
+            # BUY ou SELL (após fallbacks) ainda falhou com 4xx → tenta sem provider
+            if resp and not resp.is_success and 400 <= resp.status_code < 500:
+                logger.warning(
+                    f"[MobiautoProposalService] HTTP {resp.status_code} com provider | "
+                    f"body={resp.text[:300]} — tentando sem provider"
                 )
-                return {
-                    "success":    False,
-                    "error":      f"HTTP {resp.status_code}",
-                    "detalhe":    resp.text[:400],
-                    "dealer_id":  dealer_id,
-                }
+                body_no_provider = {k: v for k, v in body.items() if k != "provider"}
+                resp = await _post(body_no_provider, _current_token)
+                if resp is None:
+                    return {"success": False, "error": f"Timeout após {PROPOSAL_TIMEOUT}s"}
 
-        except httpx.ReadTimeout:
-            logger.error(f"[MobiautoProposalService] Timeout ({PROPOSAL_TIMEOUT}s) | dealer_id={dealer_id}")
-            return {"success": False, "error": f"Timeout após {PROPOSAL_TIMEOUT}s"}
+            if resp and resp.is_success:
+                try:
+                    resp_body = resp.json()
+                except Exception:
+                    resp_body = resp.text
+                logger.info(
+                    f"[MobiautoProposalService] Lead criado | status={resp.status_code} | "
+                    f"dealer_id={dealer_id} | type={intention_type} | response={resp_body}"
+                )
+                return {"success": True, "status_code": resp.status_code, "dealer_id": dealer_id, "response": resp_body}
+
+            status  = resp.status_code if resp else "N/A"
+            detalhe = resp.text[:600] if resp else "sem resposta"
+            logger.error(
+                f"[MobiautoProposalService] Falha final | HTTP {status} | dealer_id={dealer_id} | "
+                f"type={intention_type} | body={detalhe}"
+            )
+            return {
+                "success":   False,
+                "error":     f"HTTP {status}",
+                "detalhe":   detalhe,
+                "dealer_id": dealer_id,
+            }
 
         except Exception as exc:
             logger.exception(f"[MobiautoProposalService] Erro inesperado | {type(exc).__name__}: {exc}")

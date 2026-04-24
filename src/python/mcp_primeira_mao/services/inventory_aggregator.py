@@ -1,4 +1,5 @@
 import asyncio
+import re
 from services.mobiauto_service import MobiautoService
 from database.postgres_client import get_lojas_primeira_mao
 from utils.helpers import normalizar_placa
@@ -79,8 +80,29 @@ class InventoryAggregator:
         opcionais    = InventoryAggregator._selecionar_opcionais(features_raw)
 
         # images é lista de dicts: {'url': '...', 'id': ..., 'position': ...}
-        url_imagem = imagens[0].get("url", "") if imagens else ""
+        # Ordena por position para garantir sequência correta
+        imagens_sorted = sorted(imagens, key=lambda x: x.get("position", 999)) if imagens else []
+        url_imagem     = imagens_sorted[0].get("url", "") if imagens_sorted else ""
+        # Todos os URLs válidos — o widget testa proporção e descarta fotos de pessoa/banner
+        imagens_urls   = [img.get("url", "") for img in imagens_sorted if img.get("url")]
         preco_fmt  = InventoryAggregator._formatar_preco(preco)
+
+        # Monta URL direta do anúncio: /gradedeofertas/{Marca-Modelo-Versao}/detalhes/{id}
+        # Usa friendlyUrl da API se disponível; caso contrário constrói o slug
+        friendly   = v.get("friendlyUrl") or v.get("friendly_url") or v.get("url") or ""
+        if friendly:
+            # Remove barra inicial se vier com ela
+            friendly = friendly.lstrip("/")
+            link = f"{InventoryAggregator.BASE_SITE}/{friendly}/detalhes/{vid}"
+        else:
+            # Constrói slug: marca + modelo + versão, espaços → traço
+            # Remove apenas caracteres que quebram URLs (/, \, ?, #, %)
+            raw  = f"{marca} {modelo} {versao}".strip()
+            raw  = re.sub(r'[/\\?#%]', '', raw)       # remove chars inválidos na URL
+            raw  = re.sub(r'\s+', ' ', raw)             # colapsa espaços múltiplos
+            slug = raw.replace(' ', '-')
+            link = f"{InventoryAggregator.BASE_SITE}/{slug}/detalhes/{vid}" if vid and slug else InventoryAggregator.BASE_SITE
+            logger.debug(f"[simplificar_veiculo] slug='{slug}' | id={vid}")
 
         return {
             # — dados brutos (uso interno / filtros) —
@@ -102,8 +124,9 @@ class InventoryAggregator:
             "opcionais":    opcionais,
             # — campos de renderização visual —
             "url_imagem":      url_imagem,
+            "imagens_urls":    imagens_urls,
             "preco_formatado": preco_fmt,
-            "link_ofertas":    InventoryAggregator.BASE_SITE,
+            "link_ofertas":    link,
             "titulo_card":     f"{marca} {modelo} {versao} {ano}".strip(),
         }
 

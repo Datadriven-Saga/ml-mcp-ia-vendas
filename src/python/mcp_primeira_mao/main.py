@@ -12,10 +12,11 @@ import unicodedata
 import httpx
 from typing import Optional
 from fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import ToolAnnotations, CallToolResult, TextContent
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, FileResponse, Response, JSONResponse
 from services.inventory_aggregator import InventoryAggregator
+from services.lambda_inventory_service import LambdaInventoryService
 from services.fipe_service import FipeService
 from services.pricing_service import PricingService
 from services.mobiauto_proposal_service import MobiautoProposalService
@@ -51,6 +52,205 @@ async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
     token = os.getenv("OPENAI_CHALLENGE_TOKEN", "")
     logger.info(f"[openai-challenge] Verificação de domínio solicitada | token_configurado={bool(token)}")
     return PlainTextResponse(token)
+
+
+# ── Serving estático da UI (arquivos separados) ────────────────────
+# CSP definida no header HTTP — mais segura que meta tag no HTML.
+# Com script-src 'self' e style-src 'self' (sem 'unsafe-inline').
+_UI_DIR = os.path.join(_HERE, "ui")
+
+_UI_CSP = (
+    "default-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'self'; "
+    "img-src https: data:; "
+    "connect-src 'self'; "
+    "frame-ancestors https://chatgpt.com https://chat.openai.com 'self';"
+)
+
+_MIME_MAP = {
+    ".html": "text/html; charset=utf-8",
+    ".css":  "text/css; charset=utf-8",
+    ".js":   "application/javascript; charset=utf-8",
+}
+
+def _serve_ui_file(filename: str) -> Response:
+    """Retorna um arquivo da pasta ui/ com CSP e cache headers corretos."""
+    # Bloqueia path traversal — aceita apenas nomes sem separadores
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return Response(status_code=404)
+    path = os.path.join(_UI_DIR, filename)
+    if not os.path.isfile(path):
+        return Response(status_code=404)
+    ext = os.path.splitext(filename)[1].lower()
+    mime = _MIME_MAP.get(ext, "application/octet-stream")
+    headers = {
+        "Content-Security-Policy": _UI_CSP,
+        "X-Content-Type-Options":  "nosniff",
+        "X-Frame-Options":         "ALLOWALL",  # iframe permitido (restrito pela CSP frame-ancestors)
+        "Cache-Control":           "no-store",  # sem cache de segurança em dev; ajustar em prod
+    }
+    return FileResponse(path, media_type=mime, headers=headers)
+
+@mcp.custom_route("/ui/vehicle-offers.html", methods=["GET"])
+async def _serve_ui_html(request: Request) -> Response:
+    return _serve_ui_file("vehicle-offers.html")
+
+@mcp.custom_route("/ui/vehicle-offers.css", methods=["GET"])
+async def _serve_ui_css(request: Request) -> Response:
+    return _serve_ui_file("vehicle-offers.css")
+
+@mcp.custom_route("/ui/vehicle-offers.js", methods=["GET"])
+async def _serve_ui_js(request: Request) -> Response:
+    return _serve_ui_file("vehicle-offers.js")
+
+
+@mcp.custom_route("/local/ofertas", methods=["GET"])
+async def _api_ofertas_local(request: Request) -> Response:
+    """Endpoint REST para teste local do widget — mesma lógica de buscar_veiculos.
+    Só acessível em localhost."""
+    host        = request.headers.get("host", "")
+    client_host = request.client.host if request.client else ""
+    is_local    = (
+        host.startswith("localhost")
+        or host.startswith("127.0.0.1")
+        or client_host in ("127.0.0.1", "::1")
+    )
+    if not is_local:
+        return Response(status_code=403)
+
+    cidade   = request.query_params.get("cidade", "Goiânia")
+    consulta = request.query_params.get("consulta") or None
+
+    lojas         = await InventoryAggregator.obter_lista_lojas()
+    lojas_cidade  = _filtrar_lojas_por_cidade(lojas, cidade)
+
+    if not lojas_cidade:
+        return JSONResponse({
+            "vehicles":      [],
+            "searchContext": {"city": cidade.upper()},
+            "message":       f"Sem lojas em {cidade}",
+        })
+
+    veiculos_brutos  = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
+    veiculos_com_img = [v for v in veiculos_brutos if v.get("url_imagem")]
+
+    if consulta:
+        palavras = _extrair_palavras_chave(consulta)
+        if palavras:
+            scored = [(v, _score_veiculo(v, palavras)) for v in veiculos_com_img]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            hits = [v for v, s in scored if s > 0]
+            veiculos_com_img = (hits or veiculos_com_img)[:20]
+        else:
+            veiculos_com_img = veiculos_com_img[:20]
+    else:
+        veiculos_com_img = veiculos_com_img[:20]
+
+    cards       = [_veiculo_para_card(v) for v in veiculos_com_img]
+    nomes_lojas = [l["nome"] for l in lojas_cidade]
+
+    logger.info(f"[/api/ofertas] cidade='{cidade}' | veículos={len(cards)}")
+
+    return JSONResponse({
+        "vehicles":      cards,
+        "searchContext": {
+            "store": ", ".join(nomes_lojas),
+            "city":  cidade.upper(),
+        },
+    })
+
+
+def _local_guard(request: Request) -> bool:
+    """Retorna True se a requisição veio de localhost."""
+    host        = request.headers.get("host", "")
+    client_host = request.client.host if request.client else ""
+    return (
+        host.startswith("localhost")
+        or host.startswith("127.0.0.1")
+        or client_host in ("127.0.0.1", "::1")
+    )
+
+
+@mcp.custom_route("/local/formulario-venda", methods=["GET"])
+async def _local_formulario_venda(request: Request) -> Response:
+    """Endpoint local para testar o formulário de venda — aceita params via URL."""
+    if not _local_guard(request):
+        return Response(status_code=403)
+
+    p              = request.query_params
+    veiculo_descricao = p.get("veiculo", "Toyota Corolla 2.0 XEI 2021")
+    placa          = p.get("placa",   "ABC1D23")
+    km             = p.get("km",      "52000")
+    valor_proposta = p.get("proposta","R$ 85.000,00")
+
+    proposta_str = str(valor_proposta).strip()
+    if proposta_str and not proposta_str.startswith("R$"):
+        proposta_str = f"R$ {proposta_str}"
+
+    return JSONResponse({
+        "mode": "sell",
+        "evaluation": {
+            "vehicleDescription": veiculo_descricao,
+            "plate":              placa,
+            "km":                 km,
+            "kmFormatted":        _fmt_km(km),
+            "proposal":           proposta_str,
+        },
+        "searchContext": {"city": "GOIÂNIA/GO"},
+    })
+
+
+@mcp.custom_route("/local/registrar-compra", methods=["POST"])
+async def _local_registrar_compra(request: Request) -> Response:
+    """Endpoint local para teste de registro de interesse de compra."""
+    if not _local_guard(request):
+        return Response(status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=400)
+
+    result = await _criar_lead_compra(
+        nome_cliente     = body.get("nome_cliente", ""),
+        telefone_cliente = body.get("telefone_cliente", ""),
+        email_cliente    = body.get("email_cliente", ""),
+        titulo_card      = body.get("titulo_veiculo") or body.get("titulo_card"),
+        veiculo_id       = body.get("veiculo_id"),
+        preco_formatado  = body.get("preco_formatado"),
+        loja_unidade     = body.get("loja_unidade"),
+        plate            = body.get("plate"),
+        modelYear        = body.get("modelYear"),
+        km               = body.get("km"),
+        colorName        = body.get("colorName"),
+        observacao       = body.get("observacao"),
+    )
+    return JSONResponse(result)
+
+
+@mcp.custom_route("/local/registrar-venda", methods=["POST"])
+async def _local_registrar_venda(request: Request) -> Response:
+    """Endpoint local para teste de registro de interesse de venda."""
+    if not _local_guard(request):
+        return Response(status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=400)
+
+    result = await _criar_lead_venda(
+        nome_cliente      = body.get("nome_cliente", ""),
+        telefone_cliente  = body.get("telefone_cliente", ""),
+        email_cliente     = body.get("email_cliente", ""),
+        placa             = body.get("placa"),
+        km                = body.get("km"),
+        veiculo_descricao = body.get("veiculo_descricao"),
+        valor_proposta    = body.get("valor_proposta"),
+        uf                = body.get("uf"),
+        observacao        = body.get("observacao"),
+    )
+    return JSONResponse(result)
+
 
 # ─────────────────────────────────────────────────────────────
 # INSTRUÇÃO GLOBAL DE RENDERIZAÇÃO DE CARDS DE VEÍCULOS
@@ -281,7 +481,7 @@ async def _criar_lead_compra(
     )
 
     lead_id = (resultado.get("response") or {}).get("id")
-    await _disparar_webhook(_WH_COMPRA, {
+    wh_ok = await _disparar_webhook(_WH_COMPRA, {
         "lead_id":          lead_id,
         "nome_cliente":     nome_cliente,
         "telefone_cliente": telefone_cliente,
@@ -298,17 +498,29 @@ async def _criar_lead_compra(
         "observacao":       observacao,
     }, "cliente_quer_comprar")
 
-    status_log = "OK" if resultado.get("success") else "FALHOU"
-    logger.warning(f"[_criar_lead_compra] <<< {status_log} | dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}' | erro={resultado.get('error', '-')}")
+    # Considera sucesso se Mobiauto CRM OU webhook interno capturou o lead
+    success = resultado.get("success", False) or wh_ok
+    status_log = "OK" if success else "FALHOU"
+    logger.warning(
+        f"[_criar_lead_compra] <<< {status_log} | mobi={resultado.get('success')} | wh={wh_ok} | "
+        f"dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}' | "
+        f"mobi_erro={resultado.get('error', '-')} | detalhe={resultado.get('detalhe', '-')[:200]}"
+    )
     return {
-        "registrado":   resultado.get("success", False),
-        "dealer_id":    resultado.get("dealer_id"),
-        "fallback_url": "https://www.primeiramaosaga.com.br/gradedeofertas",
+        "registrado":    success,
+        "dealer_id":     resultado.get("dealer_id"),
+        "fallback_url":  "https://www.primeiramaosaga.com.br/gradedeofertas",
+        "_debug_error":  None if success else {
+            "mobi_error":  resultado.get("error"),
+            "mobi_detail": resultado.get("detalhe"),
+            "dealer_id":   resultado.get("dealer_id"),
+            "wh_ok":       wh_ok,
+        },
         "mensagem": (
             f"Pronto, {nome_cliente}! Em breve um consultor da Saga entrará em contato com você via WhatsApp. "
             f"Enquanto isso, fique à vontade para ver a oferta no site: "
             f"https://www.primeiramaosaga.com.br/gradedeofertas"
-            if resultado.get("success") else
+            if success else
             f"Não foi possível registrar agora: {resultado.get('error', 'erro desconhecido')}. "
             "Acesse o site como alternativa."
         ),
@@ -352,7 +564,7 @@ async def _criar_lead_venda(
     )
 
     lead_id = (resultado.get("response") or {}).get("id")
-    await _disparar_webhook(_WH_VENDA, {
+    wh_ok = await _disparar_webhook(_WH_VENDA, {
         "lead_id":           lead_id,
         "nome_cliente":      nome_cliente,
         "telefone_cliente":  telefone_cliente,
@@ -371,19 +583,66 @@ async def _criar_lead_venda(
         "observacao":        observacao,
     }, "cliente_quer_vender")
 
-    status_log = "OK" if resultado.get("success") else "FALHOU"
-    logger.warning(f"[_criar_lead_venda] <<< {status_log} | dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}' | erro={resultado.get('error', '-')}")
+    # Considera sucesso se Mobiauto CRM OU webhook interno capturou o lead
+    success = resultado.get("success", False) or wh_ok
+    status_log = "OK" if success else "FALHOU"
+    logger.warning(
+        f"[_criar_lead_venda] <<< {status_log} | mobi={resultado.get('success')} | wh={wh_ok} | "
+        f"dealer_id={resultado.get('dealer_id')} | cliente='{nome_cliente}' | "
+        f"mobi_erro={resultado.get('error', '-')} | detalhe={resultado.get('detalhe', '-')[:200]}"
+    )
     return {
-        "registrado":   resultado.get("success", False),
-        "dealer_id":    resultado.get("dealer_id"),
-        "fallback_url": "https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente",
+        "registrado":    success,
+        "dealer_id":     resultado.get("dealer_id"),
+        "fallback_url":  "https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente",
+        "_debug_error":  None if success else {
+            "mobi_error":  resultado.get("error"),
+            "mobi_detail": resultado.get("detalhe"),
+            "dealer_id":   resultado.get("dealer_id"),
+            "wh_ok":       wh_ok,
+        },
         "mensagem": (
             f"Pronto, {nome_cliente}! Um consultor da Saga entrará em contato com você em breve via WhatsApp "
             f"para prosseguir com a avaliação. Fique atento ao número informado."
-            if resultado.get("success") else
+            if success else
             f"Não foi possível registrar agora: {resultado.get('error', 'erro desconhecido')}. "
             "Acesse o link de avaliação online como alternativa."
         ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# HELPER: mapeamento de veículo do inventário para contrato da UI
+# ─────────────────────────────────────────────────────────────
+
+def _veiculo_para_card(v: dict) -> dict:
+    """Converte um veículo do inventário no contrato esperado pelo widget."""
+    marca  = v.get("makeName",  "") or ""
+    modelo = v.get("modelName", "") or ""
+    versao = v.get("trimName",  "") or ""
+    ano    = str(v.get("modelYear", "") or "")
+
+    titulo_parts = [p for p in [marca, modelo, ano] if p]
+    title = " ".join(titulo_parts) or "Veículo disponível"
+
+    return {
+        "id":           str(v.get("id", "")),
+        "title":        title,
+        "brand":        marca,
+        "model":        modelo,
+        "version":      versao,
+        "year":         ano,
+        "km":           str(v.get("km", "") or ""),
+        "kmFormatted":  _fmt_km(v.get("km")),
+        "transmission": v.get("transmissao", "") or "",
+        "fuel":         v.get("combustivel", "") or "",
+        "color":        v.get("colorName",   "") or "",
+        "price":        v.get("preco_formatado", "") or "",
+        "imageUrl":     v.get("url_imagem",  "") or "",
+        "images":       [{"url": u} for u in v.get("imagens_urls", []) if u],
+        "store":        v.get("loja_unidade","") or "",
+        "location":     v.get("loja_unidade","") or "",
+        "link":         v.get("link_ofertas","") or "https://www.primeiramaosaga.com.br/gradedeofertas",
     }
 
 
@@ -573,6 +832,138 @@ async def buscar_veiculo(
     return _renderizar_cards(sugestoes, mensagem=msg_f4, mostrar_placa=True)
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
+async def buscar_veiculos(
+    cidade: str,
+    consulta: Optional[str] = None,
+):
+    """
+    Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
+
+    USE ESTA FERRAMENTA — e não buscar_veiculo — sempre que o cliente quiser VER veículos:
+    "quero ver carros", "tem corolla?", "mostre opções", "procuro um hb20 em brasília", etc.
+    A diferença: buscar_veiculos exibe o WIDGET VISUAL; buscar_veiculo retorna só texto.
+
+    ANTES de chamar: o campo `cidade` é obrigatório.
+    Se o cliente não informou a cidade, pergunte antes de chamar.
+
+    Parâmetros:
+    - cidade: cidade ou UF onde buscar (ex: "Goiânia", "GO", "Brasília", "DF")
+    - consulta: texto livre para filtrar (ex: "corolla", "suv prata", "hb20 2022") — opcional
+
+    Após exibir: aguarde o cliente informar nome e telefone,
+    depois chame `registrar_interesse_compra`.
+    """
+    if not cidade or not cidade.strip():
+        return {
+            "vehicles": [],
+            "searchContext": {},
+            "message": "Informe a cidade para buscar veículos.",
+        }
+
+    logger.info(f"[buscar_veiculos] Chamada | cidade='{cidade}' | consulta='{consulta}'")
+
+    # ── Fonte primária: Lambda AWS ─────────────────────────────────────────
+    veiculos_brutos = await LambdaInventoryService.buscar_por_cidade(cidade)
+    fonte = "lambda"
+
+    if not veiculos_brutos:
+        # ── Fallback: Mobiauto API ─────────────────────────────────────────
+        logger.info(f"[buscar_veiculos] Lambda vazia/indisponível — usando Mobiauto como fallback")
+        lojas = await InventoryAggregator.obter_lista_lojas()
+        lojas_cidade = _filtrar_lojas_por_cidade(lojas, cidade)
+        if not lojas_cidade:
+            return {
+                "vehicles": [],
+                "searchContext": {"city": cidade.upper()},
+                "message": f"Não encontramos lojas Primeira Mão em {cidade}.",
+            }
+        veiculos_brutos = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
+        fonte = "mobiauto"
+
+    logger.info(f"[buscar_veiculos] fonte={fonte} | brutos={len(veiculos_brutos)}")
+
+    # Filtra apenas veículos com imagem
+    veiculos_com_img = [v for v in veiculos_brutos if v.get("url_imagem")]
+
+    # Aplica filtro de consulta quando informado
+    if consulta and consulta.strip():
+        palavras = _extrair_palavras_chave(consulta)
+        if palavras:
+            scored = [(v, _score_veiculo(v, palavras)) for v in veiculos_com_img]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            hits = [v for v, s in scored if s > 0]
+            veiculos_com_img = (hits or veiculos_com_img)[:20]
+        else:
+            veiculos_com_img = veiculos_com_img[:20]
+    else:
+        veiculos_com_img = veiculos_com_img[:20]
+
+    cards = [_veiculo_para_card(v) for v in veiculos_com_img]
+
+    # Nome das lojas: Lambda já traz no campo loja_unidade; Mobiauto vem do filtro
+    if fonte == "lambda":
+        nomes_lojas = list({v.get("loja_unidade", "") for v in veiculos_com_img if v.get("loja_unidade")})
+    else:
+        lojas_cidade = _filtrar_lojas_por_cidade(await InventoryAggregator.obter_lista_lojas(), cidade)
+        nomes_lojas  = [l["nome"] for l in lojas_cidade]
+
+    logger.info(f"[buscar_veiculos] Concluída | fonte={fonte} | cards={len(cards)} | lojas={nomes_lojas}")
+
+    return {
+        "vehicles": cards,
+        "searchContext": {
+            "store": ", ".join(nomes_lojas),
+            "city":  cidade.upper(),
+        },
+    }
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False))
+async def exibir_formulario_venda(
+    veiculo_descricao: str,
+    placa: Optional[str] = None,
+    km: Optional[str] = None,
+    valor_proposta: Optional[str] = None,
+):
+    """
+    Exibe o formulário visual de venda — chame IMEDIATAMENTE após avaliar_veiculo.
+
+    Mostra ao cliente um card com os dados do veículo e a proposta Saga,
+    com formulário para informar nome e telefone. Um consultor entra em contato via WhatsApp.
+
+    Parâmetros:
+    - veiculo_descricao: descrição do veículo (ex: "Toyota Corolla 2.0 XEI 2021")
+    - placa: placa do veículo avaliado
+    - km: quilometragem (ex: "52000")
+    - valor_proposta: proposta de compra calculada (ex: "85000" ou "R$ 85.000,00")
+
+    Após exibir: NÃO peça nome/telefone no chat — o formulário visual os coleta.
+    """
+    proposta_str = str(valor_proposta or "").strip()
+    if proposta_str and not proposta_str.startswith("R$"):
+        proposta_str = f"R$ {proposta_str}"
+
+    logger.info(
+        f"[exibir_formulario_venda] veiculo='{veiculo_descricao}' | placa={placa} | "
+        f"km={km} | proposta='{proposta_str}'"
+    )
+
+    return {
+        "mode": "sell",
+        "evaluation": {
+            "vehicleDescription": veiculo_descricao,
+            "plate":              placa or "",
+            "km":                 km or "",
+            "kmFormatted":        _fmt_km(km) if km else "",
+            "proposal":           proposta_str,
+        },
+        "searchContext": {
+            "city": "GOIÂNIA/GO",
+        },
+    }
+
+
 # ─────────────────────────────────────────────────────────────
 # FUNÇÕES INTERNAS (não são tools)
 # ─────────────────────────────────────────────────────────────
@@ -620,12 +1011,10 @@ async def avaliar_veiculo(
     EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra.
     NÃO adicione texto próprio.
 
-    Após exibir: aguarde o cliente informar nome e telefone.
-    QUANDO O CLIENTE FORNECER NOME E TELEFONE: chame IMEDIATAMENTE `registrar_interesse_venda`
-    com nome_cliente, telefone_cliente, placa, km e veiculo_descricao.
-    NÃO mostre link, NÃO resuma os dados recebidos, NÃO peça confirmação — chame a ferramenta.
-    O consultor entra em contato via WhatsApp — NÃO é o cliente que liga.
-    Se o cliente recusar → encerre sem chamar nenhuma ferramenta.
+    Após exibir: chame IMEDIATAMENTE `exibir_formulario_venda` com veiculo_descricao, placa,
+    km e valor_proposta para mostrar o formulário visual de contato ao cliente.
+    O formulário coletará nome e telefone automaticamente — NÃO aguarde o cliente digitar no chat.
+    Se o cliente recusar a proposta → encerre sem chamar nenhuma ferramenta.
     """
     placa_limpa = normalizar_placa(placa)
     logger.info(f"[avaliar_veiculo] Chamada iniciada | placa={placa_limpa} | km={km} | uf={uf} | cor={cor} | existe_zero_km={existe_zero_km}")
@@ -724,6 +1113,7 @@ async def registrar_interesse_compra(
     loja_unidade: Optional[str] = None,
     preco_formatado: Optional[str] = None,
     plate: Optional[str] = None,
+    veiculo_id: Optional[str] = None,
     email_cliente: Optional[str] = None,
     observacao: Optional[str] = None,
 ):
@@ -735,17 +1125,22 @@ async def registrar_interesse_compra(
     NÃO é o cliente que liga — é o consultor que entra em contato.
 
     Obrigatórios: nome_cliente e telefone_cliente.
-    Opcionais (melhora o lead): titulo_veiculo, loja_unidade, preco_formatado.
+    Opcionais (melhora o lead): titulo_veiculo, loja_unidade, preco_formatado, veiculo_id.
 
     Após chamar: exiba APENAS o campo `mensagem` retornado.
     Se registrado=false, exiba o link `fallback_url` como alternativa.
     """
-    logger.warning(f"[registrar_interesse_compra] >>> TOOL CHAMADA | cliente='{nome_cliente}' | tel='{telefone_cliente}' | veiculo='{titulo_veiculo}' | loja='{loja_unidade}'")
+    logger.warning(
+        f"[registrar_interesse_compra] >>> TOOL CHAMADA | cliente='{nome_cliente}' | "
+        f"tel='{telefone_cliente}' | veiculo='{titulo_veiculo}' | loja='{loja_unidade}' | "
+        f"veiculo_id='{veiculo_id}'"
+    )
     return await _criar_lead_compra(
         nome_cliente=nome_cliente,
         telefone_cliente=telefone_cliente,
         email_cliente=email_cliente or "",
         titulo_card=titulo_veiculo,
+        veiculo_id=veiculo_id,
         preco_formatado=preco_formatado,
         loja_unidade=loja_unidade,
         plate=plate,
@@ -788,6 +1183,34 @@ async def registrar_interesse_venda(
         valor_proposta=valor_proposta,
         observacao=observacao,
     )
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False))
+async def diagnostico_registro(
+    nome_teste: str = "Teste",
+    telefone_teste: str = "62999999999",
+):
+    """
+    FERRAMENTA DE DIAGNÓSTICO — chame apenas para depurar falhas de registro.
+    Testa a criação de lead na API Mobiauto e retorna o erro exato.
+    NÃO use em produção para clientes reais.
+    """
+    logger.warning(f"[diagnostico_registro] Iniciando teste de diagnóstico")
+    resultado = await MobiautoProposalService.criar_lead(
+        intention_type="BUY",
+        nome=nome_teste,
+        telefone=telefone_teste,
+        email="",
+        mensagem="[TESTE DIAGNÓSTICO — NÃO É LEAD REAL]",
+    )
+    logger.warning(f"[diagnostico_registro] Resultado: {resultado}")
+    return {
+        "success":   resultado.get("success"),
+        "error":     resultado.get("error"),
+        "detalhe":   resultado.get("detalhe"),
+        "dealer_id": resultado.get("dealer_id"),
+        "response":  resultado.get("response"),
+    }
 
 
 if __name__ == "__main__":

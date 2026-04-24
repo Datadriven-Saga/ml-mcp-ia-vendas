@@ -45,6 +45,8 @@ class MobiautoService:
                     resp = await client.get(url, headers={"Authorization": f"Bearer {new_token}"})
                 resp.raise_for_status()
                 lista = extrair_lista_veiculos(resp.json())
+                if lista:
+                    logger.info(f"[MobiautoService.buscar_estoque] CAMPOS_RAW | dealer_id={dealer_id} | keys={list(lista[0].keys())}")
                 logger.debug(f"[MobiautoService.buscar_estoque] Concluído | dealer_id={dealer_id} | veículos={len(lista)}")
                 return lista
         except Exception as e:

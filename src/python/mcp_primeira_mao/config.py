@@ -26,6 +26,9 @@ URL_AWS_TOKEN = os.getenv("URL_AWS_TOKEN")
 # API de Precificação
 PRECIFICACAO_API_URL = os.getenv("PRECIFICACAO_API_URL")
 
+# Lambda de estoque (fonte primária do widget)
+LAMBDA_ESTOQUE_URL = os.getenv("LAMBDA_ESTOQUE_URL", "")
+
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio").lower()
 
 TIMEOUT      = int(os.getenv("API_TIMEOUT",      30))
