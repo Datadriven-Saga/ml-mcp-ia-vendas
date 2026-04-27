@@ -91,30 +91,30 @@ class LambdaInventoryService:
         }
 
     @staticmethod
-    async def buscar_por_cidade(cidade: str) -> list:
+    async def buscar(cidade: str, filtros: dict | None = None) -> list:
         """
-        Chama a Lambda com {"name": "<cidade>"} e retorna lista normalizada.
+        Chama a Lambda com cidade + filtros opcionais e retorna lista normalizada.
+        filtros aceitos: marca, modelo, versao, preco_min, preco_max, km_max, ano_min, ano_max
         Retorna [] se a Lambda não estiver configurada, falhar ou retornar vazio.
         """
         if not LAMBDA_ESTOQUE_URL:
             logger.warning("[LambdaInventoryService] LAMBDA_ESTOQUE_URL não configurada — usando fallback Mobiauto")
             return []
 
-        # Detecta URL de console AWS (erro de configuração comum)
         if "console.aws.amazon.com" in LAMBDA_ESTOQUE_URL:
-            logger.error(
-                "[LambdaInventoryService] URL INVÁLIDA: a URL configurada é do console AWS, "
-                "não do API Gateway. Configure a URL de invocação no formato: "
-                "https://XXXXXXXXXX.execute-api.us-east-1.amazonaws.com/STAGE/ROTA"
-            )
+            logger.error("[LambdaInventoryService] URL INVÁLIDA: use a URL do API Gateway, não do console AWS")
             return []
 
+        params = {"cidade": cidade}
+        if filtros:
+            params.update({k: v for k, v in filtros.items() if v is not None})
+
         headers = {"x-api-key": LAMBDA_API_KEY}
-        logger.info(f"[LambdaInventoryService] >>> GET {LAMBDA_ESTOQUE_URL} | cidade={cidade}")
+        logger.info(f"[LambdaInventoryService] >>> GET {LAMBDA_ESTOQUE_URL} | params={params}")
 
         try:
             async with httpx.AsyncClient(timeout=LAMBDA_TIMEOUT) as client:
-                resp = await client.get(LAMBDA_ESTOQUE_URL, params={"cidade": cidade}, headers=headers)
+                resp = await client.get(LAMBDA_ESTOQUE_URL, params=params, headers=headers)
                 logger.info(f"[LambdaInventoryService] <<< HTTP {resp.status_code}")
                 resp.raise_for_status()
         except Exception as exc:
@@ -155,8 +155,10 @@ class LambdaInventoryService:
             logger.info(f"[LambdaInventoryService] RAW[0] values={raw[0]}")
 
         veiculos = [LambdaInventoryService._normalizar(v) for v in raw if isinstance(v, dict)]
-        logger.info(f"[LambdaInventoryService] {len(veiculos)} veículos recebidos para '{cidade}'")
-        if veiculos:
-            v0 = veiculos[0]
-            logger.info(f"[LambdaInventoryService] NORM[0] modelYear={v0.get('modelYear')!r} salePrice={v0.get('salePrice')!r} preco_formatado={v0.get('preco_formatado')!r} km={v0.get('km')!r}")
+        logger.info(f"[LambdaInventoryService] {len(veiculos)} veículos recebidos")
         return veiculos
+
+    @staticmethod
+    async def buscar_por_cidade(cidade: str) -> list:
+        """Alias retrocompatível — chama buscar() sem filtros extras."""
+        return await LambdaInventoryService.buscar(cidade)

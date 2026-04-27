@@ -106,9 +106,9 @@ async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-async def _buscar_ofertas_json(cidade: str, consulta: str | None) -> dict:
+async def _buscar_ofertas_json(cidade: str, consulta: str | None, filtros: dict | None = None) -> dict:
     """Lógica compartilhada entre /local/ofertas e /api/ofertas."""
-    veiculos_brutos = await LambdaInventoryService.buscar_por_cidade(cidade)
+    veiculos_brutos = await LambdaInventoryService.buscar(cidade, filtros)
     fonte = "lambda"
 
     if not veiculos_brutos:
@@ -151,9 +151,11 @@ async def _buscar_ofertas_json(cidade: str, consulta: str | None) -> dict:
 @mcp.custom_route("/api/ofertas", methods=["GET"])
 async def _api_ofertas(request: Request) -> Response:
     """Endpoint público para o widget em produção."""
-    cidade   = request.query_params.get("cidade", "Goiânia")
-    consulta = request.query_params.get("consulta") or None
-    return JSONResponse(await _buscar_ofertas_json(cidade, consulta))
+    qp       = request.query_params
+    cidade   = qp.get("cidade", "Goiânia")
+    consulta = qp.get("consulta") or None
+    filtros  = {k: qp.get(k) for k in ("marca","modelo","versao","preco_min","preco_max","km_max","ano_min","ano_max") if qp.get(k)}
+    return JSONResponse(await _buscar_ofertas_json(cidade, consulta, filtros or None))
 
 
 @mcp.custom_route("/local/ofertas", methods=["GET"])
@@ -861,24 +863,36 @@ async def buscar_veiculo(
 async def buscar_veiculos(
     cidade: str,
     consulta: Optional[str] = None,
+    marca: Optional[str] = None,
+    modelo: Optional[str] = None,
+    versao: Optional[str] = None,
+    preco_min: Optional[float] = None,
+    preco_max: Optional[float] = None,
+    km_max: Optional[int] = None,
+    ano_min: Optional[int] = None,
+    ano_max: Optional[int] = None,
     task_progress: Optional[str] = None,
 ):
     """
     Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
 
-    USE ESTA FERRAMENTA — e não buscar_veiculo — sempre que o cliente quiser VER veículos:
-    "quero ver carros", "tem corolla?", "mostre opções", "procuro um hb20 em brasília", etc.
-    A diferença: buscar_veiculos exibe o WIDGET VISUAL; buscar_veiculo retorna só texto.
+    USE ESTA FERRAMENTA sempre que o cliente quiser VER veículos:
+    "quero ver carros", "tem corolla?", "mostre opções em Brasília", "HB20 abaixo de R$60.000", etc.
 
-    ANTES de chamar: o campo `cidade` é obrigatório.
-    Se o cliente não informou a cidade, pergunte antes de chamar.
+    ANTES de chamar: `cidade` é obrigatório. Se não informada, pergunte antes.
 
-    Parâmetros:
-    - cidade: cidade ou UF onde buscar (ex: "Goiânia", "GO", "Brasília", "DF")
-    - consulta: texto livre para filtrar (ex: "corolla", "suv prata", "hb20 2022") — opcional
+    Parâmetros de filtro (todos opcionais — use quando o cliente especificar):
+    - consulta:  texto livre (ex: "suv prata", "1.0 turbo")
+    - marca:     fabricante  (ex: "Volkswagen", "Hyundai")
+    - modelo:    modelo      (ex: "Gol", "Creta", "HB20")
+    - versao:    versão/trim (ex: "Sport", "1.6 MSI")
+    - preco_min: preço mínimo em R$ (ex: 50000)
+    - preco_max: preço máximo em R$ (ex: 80000)
+    - km_max:    quilometragem máxima (ex: 50000)
+    - ano_min:   ano mínimo do veículo (ex: 2020)
+    - ano_max:   ano máximo do veículo (ex: 2024)
 
-    Após exibir: aguarde o cliente informar nome e telefone,
-    depois chame `registrar_interesse_compra`.
+    Após exibir: aguarde nome e telefone, depois chame `registrar_interesse_compra`.
     """
     if not cidade or not cidade.strip():
         return {
@@ -887,14 +901,25 @@ async def buscar_veiculos(
             "message": "Informe a cidade para buscar veículos.",
         }
 
-    logger.info(f"[buscar_veiculos] Chamada | cidade='{cidade}' | consulta='{consulta}'")
+    filtros = {k: v for k, v in {
+        "marca":     marca,
+        "modelo":    modelo,
+        "versao":    versao,
+        "preco_min": preco_min,
+        "preco_max": preco_max,
+        "km_max":    km_max,
+        "ano_min":   ano_min,
+        "ano_max":   ano_max,
+    }.items() if v is not None}
+
+    logger.info(f"[buscar_veiculos] Chamada | cidade='{cidade}' | consulta='{consulta}' | filtros={filtros}")
 
     # ── Fonte primária: Lambda AWS ─────────────────────────────────────────
     logger.info("=" * 60)
     logger.info(f"[FONTE] Tentando LAMBDA AWS para cidade='{cidade}'")
     logger.info("=" * 60)
 
-    veiculos_brutos = await LambdaInventoryService.buscar_por_cidade(cidade)
+    veiculos_brutos = await LambdaInventoryService.buscar(cidade, filtros or None)
     fonte = "lambda"
 
     if veiculos_brutos:
@@ -956,7 +981,13 @@ async def buscar_veiculos(
             "store": ", ".join(nomes_lojas),
             "city":  cidade.upper(),
         },
-        "$display": _WIDGET_URL,
+        "$display": _WIDGET_URL + "?" + "&".join(
+            f"{k}={v}" for k, v in {
+                "cidade":    cidade,
+                **({"consulta": consulta} if consulta else {}),
+                **{k: str(v) for k, v in filtros.items()},
+            }.items()
+        ),
     }
 
 
