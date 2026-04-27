@@ -9,10 +9,12 @@ if _HERE not in sys.path:
 
 import re
 import unicodedata
+import urllib.parse
 import httpx
 from typing import Optional
 from fastmcp import FastMCP
-from mcp.types import ToolAnnotations, CallToolResult, TextContent
+from fastmcp.tools.tool import ToolResult as _ToolResult
+from mcp.types import ToolAnnotations, TextContent
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, FileResponse, Response, JSONResponse
 from services.inventory_aggregator import InventoryAggregator
@@ -70,7 +72,8 @@ _UI_CSP = (
     "style-src 'self'; "
     "img-src https: data:; "
     "connect-src 'self'; "
-    "frame-ancestors https://chatgpt.com https://chat.openai.com 'self';"
+    "frame-ancestors https://chatgpt.com https://*.chatgpt.com "
+    "https://chat.openai.com https://*.chat.openai.com 'self';"
 )
 
 _MIME_MAP = {
@@ -92,8 +95,9 @@ def _serve_ui_file(filename: str) -> Response:
     headers = {
         "Content-Security-Policy": _UI_CSP,
         "X-Content-Type-Options":  "nosniff",
-        "X-Frame-Options":         "ALLOWALL",  # iframe permitido (restrito pela CSP frame-ancestors)
-        "Cache-Control":           "no-store",  # sem cache de segurança em dev; ajustar em prod
+        # X-Frame-Options omitido — frame-ancestors na CSP é a diretiva correta e
+        # tem precedência. ALLOWALL é não-standard e ignorado em Firefox/Safari.
+        "Cache-Control":           "no-store",
     }
     return FileResponse(path, media_type=mime, headers=headers)
 
@@ -899,14 +903,11 @@ async def buscar_veiculos(
     - ano_min:   ano mínimo do veículo (ex: 2020)
     - ano_max:   ano máximo do veículo (ex: 2024)
 
+    EXIBIÇÃO: o widget visual é renderizado automaticamente pelo ChatGPT.
     Após exibir: aguarde nome e telefone, depois chame `registrar_interesse_compra`.
     """
     if not cidade or not cidade.strip():
-        return {
-            "vehicles": [],
-            "searchContext": {},
-            "message": "Informe a cidade para buscar veículos.",
-        }
+        return "Informe a cidade para buscar veículos."
 
     filtros = {k: v for k, v in {
         "marca":     marca,
@@ -921,79 +922,60 @@ async def buscar_veiculos(
 
     logger.info(f"[buscar_veiculos] Chamada | cidade='{cidade}' | consulta='{consulta}' | filtros={filtros}")
 
-    # ── Fonte primária: Lambda AWS ─────────────────────────────────────────
-    logger.info("=" * 60)
-    logger.info(f"[FONTE] Tentando LAMBDA AWS para cidade='{cidade}'")
-    logger.info("=" * 60)
-
+    # Pré-valida: verifica se Lambda tem resultados para a cidade+filtros
     veiculos_brutos = await LambdaInventoryService.buscar(cidade, filtros or None)
-    fonte = "lambda"
 
-    if veiculos_brutos:
-        logger.info(f"[FONTE] ✔ LAMBDA retornou {len(veiculos_brutos)} veículos para '{cidade}'")
-    elif not _LAMBDA_APENAS:
-        # ── FALLBACK MOBIAUTO — desabilitado (_LAMBDA_APENAS = True) ──────
-        logger.warning(f"[FONTE] ✘ LAMBDA sem resultado — ativando FALLBACK MOBIAUTO para '{cidade}'")
-        lojas = await InventoryAggregator.obter_lista_lojas()
-        lojas_cidade = _filtrar_lojas_por_cidade(lojas, cidade)
-        if not lojas_cidade:
-            return {
-                "vehicles": [],
-                "searchContext": {"city": cidade.upper()},
-                "message": f"Não encontramos lojas Primeira Mão em {cidade}.",
-            }
-        veiculos_brutos = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
-        fonte = "mobiauto"
-        logger.info(f"[FONTE] MOBIAUTO retornou {len(veiculos_brutos)} veículos para '{cidade}'")
-    else:
-        logger.warning(f"[FONTE] Lambda sem resultado para '{cidade}' — fallback desabilitado")
-        return {
-            "vehicles": [],
-            "searchContext": {"city": cidade.upper()},
-            "message": f"Não encontramos veículos disponíveis em {cidade}.",
-        }
+    if not veiculos_brutos and not _LAMBDA_APENAS:
+        # FALLBACK MOBIAUTO — desabilitado (_LAMBDA_APENAS = True)
+        logger.warning(f"[buscar_veiculos] Lambda vazia — fallback desabilitado para '{cidade}'")
 
-    # Filtra apenas veículos com imagem
-    veiculos_com_img = [v for v in veiculos_brutos if v.get("url_imagem")]
+    if not veiculos_brutos:
+        logger.warning(f"[buscar_veiculos] Nenhum veículo encontrado para cidade='{cidade}' filtros={filtros}")
+        return f"Não encontramos veículos disponíveis em {cidade} com esses critérios."
 
-    # Aplica filtro de consulta quando informado
-    if consulta and consulta.strip():
-        palavras = _extrair_palavras_chave(consulta)
-        if palavras:
-            scored = [(v, _score_veiculo(v, palavras)) for v in veiculos_com_img]
-            scored.sort(key=lambda x: x[1], reverse=True)
-            hits = [v for v, s in scored if s > 0]
-            veiculos_com_img = (hits or veiculos_com_img)[:20]
-        else:
-            veiculos_com_img = veiculos_com_img[:20]
-    else:
-        veiculos_com_img = veiculos_com_img[:20]
+    n = len(veiculos_brutos)
 
-    cards = [_veiculo_para_card(v) for v in veiculos_com_img]
+    # Monta URL do widget com todos os parâmetros de busca
+    url_params: dict = {"cidade": cidade}
+    if consulta:
+        url_params["consulta"] = consulta
+    url_params.update({k: str(v) for k, v in filtros.items()})
+    widget_url = _WIDGET_URL + "?" + urllib.parse.urlencode(url_params)
 
-    # Nome das lojas: Lambda já traz no campo loja_unidade; Mobiauto vem do filtro
-    if fonte == "lambda":
-        nomes_lojas = list({v.get("loja_unidade", "") for v in veiculos_com_img if v.get("loja_unidade")})
-    else:
-        lojas_cidade = _filtrar_lojas_por_cidade(await InventoryAggregator.obter_lista_lojas(), cidade)
-        nomes_lojas  = [l["nome"] for l in lojas_cidade]
+    filtro_desc = ", ".join(f"{k}: {v}" for k, v in filtros.items())
+    texto = (
+        f"Encontrei {n} veículos em {cidade}"
+        + (f" · {filtro_desc}" if filtro_desc else "")
+        + ". O widget de cards está sendo exibido."
+    )
 
-    logger.info(f"[buscar_veiculos] Concluída | fonte={fonte} | cards={len(cards)} | lojas={nomes_lojas}")
+    logger.info(f"[buscar_veiculos] → widget | n={n} | url={widget_url}")
 
-    return {
-        "vehicles": cards,
-        "searchContext": {
-            "store": ", ".join(nomes_lojas),
-            "city":  cidade.upper(),
+    # Retorna ToolResult com meta → FastMCP serializa como _meta no protocolo MCP,
+    # que o ChatGPT Apps SDK usa para renderizar o iframe do widget.
+    return _ToolResult(
+        content=TextContent(type="text", text=texto),
+        structured_content={
+            "cidade":   cidade,
+            "consulta": consulta or "",
+            **{k: str(v) for k, v in filtros.items()},
         },
-        "$display": _WIDGET_URL + "?" + "&".join(
-            f"{k}={v}" for k, v in {
-                "cidade":    cidade,
-                **({"consulta": consulta} if consulta else {}),
-                **{k: str(v) for k, v in filtros.items()},
-            }.items()
-        ),
-    }
+        meta={
+            "openai/outputTemplate": widget_url,
+            "openai/widgetDescription": "Cards interativos de veículos seminovos Primeira Mão Saga.",
+            "openai/widgetPrefersBorder": True,
+            "openai/widgetCSP": {
+                "connect_domains": [
+                    "https://mcp-primeiramao.sagadatadriven.com.br",
+                ],
+                "resource_domains": [
+                    "https://mcp-primeiramao.sagadatadriven.com.br",
+                    "https://images.primeiramaosaga.com.br",
+                    "https://www.primeiramaosaga.com.br",
+                ],
+            },
+        },
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False))

@@ -1580,6 +1580,12 @@
       var baseEndpoint = isLocal ? '/local/ofertas' : '/api/ofertas';
       apiUrl = baseEndpoint + '?cidade=' + encodeURIComponent(cidade);
       if (consulta) apiUrl += '&consulta=' + encodeURIComponent(consulta);
+      /* Repassa filtros da URL para o endpoint (marca, modelo, versao, preco_*, km_max, ano_*) */
+      var filterKeys = ['marca', 'modelo', 'versao', 'preco_min', 'preco_max', 'km_max', 'ano_min', 'ano_max'];
+      for (var _fi = 0; _fi < filterKeys.length; _fi++) {
+        var _fv = params.get(filterKeys[_fi]);
+        if (_fv) apiUrl += '&' + filterKeys[_fi] + '=' + encodeURIComponent(_fv);
+      }
     }
 
     if (apiUrl) {
