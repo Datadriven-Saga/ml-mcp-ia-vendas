@@ -731,6 +731,9 @@ async def listar_lojas():
     """
     Lista todas as lojas Primeira Mão Saga cadastradas com nome, cidade e UF.
 
+    NÃO USE quando o cliente quer comprar ou ver veículos — use `buscar_veiculos` diretamente.
+    Use APENAS quando o cliente explicitamente pede a lista de lojas/unidades (ex: "quais lojas vocês têm?").
+
     OUTPUT: exiba o campo `lojas_markdown` diretamente ao usuário, exatamente como retornado.
     Adicione no rodapé a fonte dos dados e o total de lojas.
     """
@@ -897,33 +900,28 @@ async def buscar_veiculos(
     """
     Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
 
-    CHAME IMEDIATAMENTE, sem fazer perguntas, sempre que o cliente:
-    - Mencionar que quer comprar ou ver carros em alguma cidade
-    - Citar uma marca, modelo, tipo ou faixa de preço
-    - Responder a qualquer pergunta de filtro (marca, modelo, etc.)
+    ═══ REGRA ABSOLUTA ═══
+    CHAME IMEDIATAMENTE assim que `cidade` for conhecida — com ou sem outros filtros.
+    NÃO faça nenhuma pergunta antes. NÃO peça marca, modelo, preço ou tipo antes de chamar.
+    NÃO espere o cliente informar mais detalhes. Chame agora com o que já tem.
 
-    ÚNICO caso para perguntar antes: `cidade` não foi mencionada em nenhum momento
-    da conversa. Se já foi citada (mesmo que em mensagem anterior), use-a e chame agora.
+    ÚNICO caso para perguntar antes: cidade não foi mencionada em nenhuma mensagem da conversa.
+    Se cidade já apareceu (mesmo que em mensagem anterior) → chame AGORA, sem perguntar nada.
 
-    NÃO faça perguntas de confirmação. NÃO espere o cliente informar todos os filtros.
-    Chame com o que já foi informado e deixe o widget mostrar as opções.
+    ═══ APÓS CHAMAR ═══
+    PARE. NÃO pergunte filtros adicionais. NÃO diga "posso filtrar por marca/preço/tipo".
+    Os cards são exibidos automaticamente. Aguarde o cliente dar nome e telefone.
+    Se o cliente pedir refinamento (ex: "só Polo") → chame buscar_veiculos novamente com o novo filtro.
 
-    Exemplos — chame imediatamente:
-    "quero um carro em Goiânia"            → buscar_veiculos(cidade="Goiânia")
-    "tem Polo?" (cidade já mencionada)     → buscar_veiculos(cidade="Goiânia", modelo="Polo")
-    "Volkswagen Polo" após cidade conhecida → buscar_veiculos(cidade="Goiânia", marca="Volkswagen", modelo="Polo")
-    "HB20 até 60 mil em Brasília"          → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
+    ═══ EXEMPLOS ═══
+    "quero um carro em Goiânia"              → buscar_veiculos(cidade="Goiânia")
+    "estou procurando carro em goiania"      → buscar_veiculos(cidade="Goiânia")
+    "tem Polo?" (cidade já mencionada)       → buscar_veiculos(cidade="Goiânia", modelo="Polo")
+    "Volkswagen Polo" (cidade já conhecida)  → buscar_veiculos(cidade="Goiânia", marca="Volkswagen", modelo="Polo")
+    "HB20 até 60 mil em Brasília"            → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
 
-    Filtros opcionais (use apenas quando o cliente já tiver informado — sem perguntar):
-    - consulta:  texto livre ("suv prata", "1.0 turbo")
-    - marca:     fabricante ("Volkswagen", "Hyundai")
-    - modelo:    ("Polo", "HB20", "Creta")
-    - versao:    versão/trim ("Sport", "1.6 MSI")
-    - preco_min / preco_max: faixa de preço em R$
-    - km_max:    quilometragem máxima
-    - ano_min / ano_max: faixa de ano
-
-    Após o widget ser exibido: aguarde nome e telefone e chame `registrar_interesse_compra`.
+    Filtros opcionais — preencha APENAS com o que o cliente já informou espontaneamente:
+    - marca, modelo, versao, consulta, preco_min, preco_max, km_max, ano_min, ano_max
     """
     if not cidade or not cidade.strip():
         return "Informe a cidade para buscar veículos."
@@ -965,20 +963,20 @@ async def buscar_veiculos(
     texto = (
         f"Encontrei {n} veículos em {cidade}"
         + (f" · {filtro_desc}" if filtro_desc else "")
-        + ". O widget de cards está sendo exibido."
+        + "."
     )
 
     logger.info(f"[buscar_veiculos] → widget | n={n} | url={widget_url}")
 
-    # _meta.ui.resourceUri já está no descritor da tool (via AppConfig no decorator).
-    # O ChatGPT usa isso para carregar ui://vehicle-offers e injeta os args via
-    # window.openai.toolInput. O structured_content chega via ui/notifications/tool-result.
     return _ToolResult(
         content=TextContent(type="text", text=texto),
         structured_content={
             "cidade":   cidade,
             "consulta": consulta or "",
             **{k: str(v) for k, v in filtros.items()},
+        },
+        meta={
+            "openai/outputTemplate": widget_url,
         },
     )
 
@@ -1040,6 +1038,9 @@ async def exibir_formulario_venda(
             "km":       km or "",
             "km_fmt":   km_fmt,
             "proposta": proposta_str,
+        },
+        meta={
+            "openai/outputTemplate": widget_url,
         },
     )
 
