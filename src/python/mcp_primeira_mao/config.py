@@ -28,6 +28,7 @@ PRECIFICACAO_API_URL = os.getenv("PRECIFICACAO_API_URL")
 
 # Lambda de estoque (fonte primária do widget)
 LAMBDA_ESTOQUE_URL = os.getenv("LAMBDA_ESTOQUE_URL", "")
+LAMBDA_API_KEY     = os.getenv("LAMBDA_API_KEY", "")
 
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio").lower()
 

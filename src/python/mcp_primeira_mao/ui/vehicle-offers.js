@@ -659,12 +659,13 @@
       text:  vehicle.title || 'Veículo disponível',
     }));
 
-    /* Especificações: linha única "ano • km • câmbio • combustível" */
+    /* Especificações: linha única "Ano: X • km: Y • câmbio • combustível" */
+    var kmVal = vehicle.kmFormatted || fmtKm(vehicle.km);
     var specParts = [
-      vehicle.year,
-      vehicle.kmFormatted || fmtKm(vehicle.km),
-      vehicle.transmission,
-      vehicle.fuel,
+      vehicle.year      ? 'Ano veículo: ' + vehicle.year : null,
+      kmVal             ? 'km: '          + kmVal        : null,
+      vehicle.transmission || null,
+      vehicle.fuel         || null,
     ].filter(function (v) { return v && String(v).trim(); });
 
     if (specParts.length) {

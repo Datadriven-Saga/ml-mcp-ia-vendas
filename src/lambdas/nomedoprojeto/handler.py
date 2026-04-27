@@ -1,21 +1,36 @@
 import awswrangler as wr
 import json
+import os
 import pandas as pd
 from utils import log, dumps
 
+API_KEY = os.environ.get('API_KEY', '')
+
 def lambda_handler(event, context):
-    # 1. Tratamento do evento para extrair 'name' (cidade)
+    # Validação do x-api-key
+    headers = event.get('headers') or {}
+    provided_key = headers.get('x-api-key') or headers.get('X-Api-Key', '')
+    if not API_KEY or provided_key != API_KEY:
+        log("Acesso negado: x-api-key inválida ou ausente", level='WARNING')
+        return {
+            'statusCode': 401,
+            'headers': {'Content-Type': 'application/json'},
+            'body': dumps({'error': 'Unauthorized'})
+        }
+
+    # 1. Tratamento do evento para extrair 'cidade' (query string > body)
     try:
-        # Tenta extrair o body caso venha de um API Gateway
-        body = event.get('body', {})
-        if isinstance(body, str):
-            body = json.loads(body)
-        
-        # Se o body estiver vazio ou não for dict, tenta o evento raiz
-        if not isinstance(body, dict) or not body:
-            body = event
-            
-        cidade_param = body.get('name', 'Goiânia')
+        qs = event.get('queryStringParameters') or {}
+        cidade_param = qs.get('cidade')
+
+        if not cidade_param:
+            body = event.get('body', {})
+            if isinstance(body, str):
+                body = json.loads(body)
+            if not isinstance(body, dict):
+                body = event
+            cidade_param = body.get('cidade', 'Goiânia')
+
         log(f"Iniciando busca para a cidade: {cidade_param}", level='INFO')
         
     except Exception as e:
@@ -23,8 +38,6 @@ def lambda_handler(event, context):
         cidade_param = 'Goiânia'
 
     try:
-        # 2. Query formatada
-        # Nota: Mantive a lógica de REGEXP_REPLACE e concatenação do Athena
         query = f"""
         SELECT 
             d.id,
@@ -32,15 +45,21 @@ def lambda_handler(event, context):
             dl."name" AS loja,
             c."name" AS cidade,
             c.state_id AS uf,
-            t."name" AS versao,
+            t."name" AS versao_tabela,
+            d.version AS versao_direta,
             m."name" AS modelo,
             mk."name" AS marca,
+            d.price,
+            d.km,              -- Nova coluna adicionada
+            d.model_year,
+            -- URL do Veículo
             'https://www.primeiramaosaga.com.br/gradedeofertas/' || 
             CAST(mk."name" AS VARCHAR) || '-' || 
             CAST(m."name" AS VARCHAR) || '-' || 
             REGEXP_REPLACE(CAST(t."name" AS VARCHAR), ' ', '-') || 
             '/detalhes/' || 
             CAST(d.id AS VARCHAR) AS url,
+            -- URL da Imagem
             'https://images.primeiramaosaga.com.br/images/api/v1.0/' || 
             CAST(img.min_image_id AS VARCHAR) || 
             '/transform/2Cw_638,q_80' AS url_imagem
@@ -50,6 +69,7 @@ def lambda_handler(event, context):
         LEFT JOIN modelled.pm_make AS mk ON m.make_id = mk.id
         LEFT JOIN modelled.pm_dealer AS dl ON d.dealer_id = dl.id
         LEFT JOIN modelled.pm_city AS c ON dl.city_id = c.id
+        -- Subquery para pegar a imagem de menor posição
         INNER JOIN (
             SELECT deal_id, MIN(image_id) as min_image_id
             FROM modelled.pm_deal_x_image
