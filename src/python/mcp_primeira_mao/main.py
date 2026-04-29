@@ -896,10 +896,10 @@ async def buscar_veiculo(
 @mcp.tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False),
     app=_APP_COMPRA,
-    # openai/outputTemplate no nível raiz de _meta (tool descriptor) é o campo
-    # que o ChatGPT lê para saber qual URL carregar como widget iframe.
-    # AppConfig seta _meta.ui.resourceUri (MCP standard); este seta o alias OpenAI.
-    meta={"openai/outputTemplate": _WIDGET_URL},
+    # openai/outputTemplate no tool descriptor (não no result) aponta para o
+    # MCP resource uri://. O ChatGPT busca esse recurso via protocolo MCP e
+    # carrega o HTML como widget iframe.
+    meta={"openai/outputTemplate": "ui://vehicle-offers"},
 )
 async def buscar_veiculos(
     cidade: str,
@@ -1002,23 +1002,17 @@ async def buscar_veiculos(
             type="text",
             text=f"[widget exibido] {mensagem_header}. NÃO adicione texto nem pergunte filtros.",
         ),
-        # structuredContent: visível ao modelo — sem array de veículos
-        # para evitar que o modelo gere tabela/markdown em cima deles.
+        # structuredContent: ChatGPT requer vehicles aqui para entregar ao widget.
+        # O campo content (acima) instrui o modelo a não reprocessar esses dados.
         structured_content={
-            "status":  "cards_displayed",
-            "title":   mensagem_header,
-            "total":   n,
-            "city":    cidade.upper(),
-        },
-        # _meta: entregue apenas ao widget, nunca chega ao modelo (Apps SDK docs).
-        meta={
-            "openai/outputTemplate": widget_url,
-            "ui": {"layout": "card_grid"},
-            "items": cards,
+            "vehicles": cards,
             "searchContext": {
                 "city":  cidade.upper(),
                 "store": ", ".join(nomes_lojas),
             },
+        },
+        meta={
+            "ui": {"layout": "card_grid"},
         },
     )
 

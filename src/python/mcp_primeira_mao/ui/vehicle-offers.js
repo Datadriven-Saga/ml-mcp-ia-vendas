@@ -1554,20 +1554,20 @@
         return;
       }
 
-      /* ── Modo compra: lê de _meta.items (dados pesados, invisíveis ao modelo) ── */
-      if (Array.isArray(meta.items)) {
-        render({
-          vehicles:      meta.items,
-          searchContext: meta.searchContext || {},
-        }, {});
-        return;
-      }
-
-      /* ── Fallback: structuredContent.vehicles (compatibilidade) ── */
+      /* ── Modo compra: lê de structuredContent.vehicles (contrato principal) ── */
       if (Array.isArray(sc.vehicles)) {
         render({
           vehicles:      sc.vehicles,
           searchContext: sc.searchContext || {},
+        }, {});
+        return;
+      }
+
+      /* ── Fallback: _meta.items (compatibilidade com versões anteriores) ── */
+      if (Array.isArray(meta.items)) {
+        render({
+          vehicles:      meta.items,
+          searchContext: meta.searchContext || {},
         }, {});
       }
       return;
