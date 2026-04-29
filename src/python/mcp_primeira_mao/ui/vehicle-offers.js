@@ -1,4 +1,4 @@
-console.log("[vehicle-offers] JS carregado");
+console.log("[vehicle-offers] inline JS carregado");
 
 (function () {
   'use strict';

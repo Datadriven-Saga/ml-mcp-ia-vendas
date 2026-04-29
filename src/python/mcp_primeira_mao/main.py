@@ -7,6 +7,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import hashlib
+import base64
 import json
 import re
 import unicodedata
@@ -119,24 +121,32 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     except Exception as e:
         resources_wire = [{"error": str(e)}]
 
-    # ── html_preview: primeiros 600 chars do HTML inline servido por ui://vehicle-offers ──
+    # ── html_preview + inline_check ──────────────────────────────────────────
     html_preview = None
     try:
-        with open(os.path.join(_UI_DIR, "vehicle-offers.css"), "r", encoding="utf-8") as _f:
-            _css = _f.read()
-        with open(os.path.join(_UI_DIR, "vehicle-offers.js"), "r", encoding="utf-8") as _f:
-            _js = _f.read()
         _full = (
             '<!DOCTYPE html>\n<html lang="pt-BR">\n<head>\n'
             '  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-            f'  <style>\n{_css}\n  </style>\n'
-            f'</head>\n<body>\n  <div id="app">Carregando ofertas...</div>\n  <script>\n{_js}\n  </script>\n</body>\n</html>'
+            f'  <style>{_CSS_CONTENT}</style>\n'
+            f'</head>\n<body>\n  <div id="app">Carregando ofertas...</div>\n  <script>{_JS_CONTENT}</script>\n</body>\n</html>'
         )
+        _bad_js  = any(p in _full for p in ["/ui/vehicle-offers.js",  "/static/vehicle-offers.js",
+                                             "src=\"https://mcp-primeiramao"])
+        _bad_css = any(p in _full for p in ["/ui/vehicle-offers.css", "/static/vehicle-offers.css",
+                                             "href=\"https://mcp-primeiramao"])
         html_preview = {
-            "total_chars": len(_full),
-            "css_chars":   len(_css),
-            "js_chars":    len(_js),
-            "head_preview": _full[:600],
+            "total_chars":                len(_full),
+            "css_chars":                  len(_CSS_CONTENT),
+            "js_chars":                   len(_JS_CONTENT),
+            "has_style_tag":              "<style>" in _full,
+            "has_script_tag":             "<script>" in _full,
+            "no_external_js":             not _bad_js,
+            "no_external_css":            not _bad_css,
+            "css_hash":                   _CSS_HASH or "ERRO_HASH",
+            "js_hash":                    _JS_HASH  or "ERRO_HASH",
+            "widget_csp_script_sources":  _WIDGET_CSP_META.get("openai/widgetCSP", {}).get("script_sources"),
+            "widget_csp_style_sources":   _WIDGET_CSP_META.get("openai/widgetCSP", {}).get("style_sources"),
+            "head_preview":               _full[:500],
         }
     except Exception as e:
         html_preview = {"error": str(e)}
@@ -205,6 +215,47 @@ async def _debug_inspect(request: Request) -> JSONResponse:
 # Com script-src 'self' e style-src 'self' (sem 'unsafe-inline').
 _UI_DIR = os.path.join(_HERE, "ui")
 
+# ── Hashes SHA-256 para CSP inline ────────────────────────────────────────
+# Calculados ao startup. O hash é de exatamente os bytes que serão embutidos no
+# HTML do resource — sem whitespace extra em volta do bloco <style>/<script>.
+# Isso garante que script-src 'sha256-…' / style-src 'sha256-…' no
+# openai/widgetCSP correspondam ao conteúdo inlined.
+
+def _csp_hash(content: str) -> str:
+    digest = hashlib.sha256(content.encode("utf-8")).digest()
+    return "'sha256-" + base64.b64encode(digest).decode("ascii") + "'"
+
+_CSS_CONTENT: str = ""
+_JS_CONTENT:  str = ""
+_CSS_HASH:    str = ""
+_JS_HASH:     str = ""
+
+try:
+    with open(os.path.join(_UI_DIR, "vehicle-offers.css"), "r", encoding="utf-8") as _fh:
+        _CSS_CONTENT = _fh.read()
+    with open(os.path.join(_UI_DIR, "vehicle-offers.js"),  "r", encoding="utf-8") as _fh:
+        _JS_CONTENT  = _fh.read()
+    _CSS_HASH = _csp_hash(_CSS_CONTENT)
+    _JS_HASH  = _csp_hash(_JS_CONTENT)
+except Exception as _hash_err:
+    pass  # logger ainda não existe aqui; erro será visível no debug/inspect
+
+_WIDGET_CSP_META: dict = {
+    "openai/widgetDomain": "https://mcp-primeiramao.sagadatadriven.com.br",
+    "openai/widgetCSP": {
+        "connect_domains": [
+            "https://mcp-primeiramao.sagadatadriven.com.br",
+        ],
+        "resource_domains": [
+            "https://mcp-primeiramao.sagadatadriven.com.br",
+            "https://images.primeiramaosaga.com.br",
+            "https://www.primeiramaosaga.com.br",
+        ],
+        **( {"script_sources": [_JS_HASH], "style_sources": [_CSS_HASH]}
+            if _JS_HASH and _CSS_HASH else {} ),
+    },
+}
+
 _UI_CSP = (
     "default-src 'none'; "
     "script-src 'self'; "
@@ -272,45 +323,26 @@ async def _serve_static_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-@mcp.resource(
-    "ui://vehicle-offers",
-    mime_type="text/html;profile=mcp-app",
-    meta={
-        "openai/widgetDomain": "https://mcp-primeiramao.sagadatadriven.com.br",
-        "openai/widgetCSP": {
-            "connect_domains": [
-                "https://mcp-primeiramao.sagadatadriven.com.br",
-            ],
-            "resource_domains": [
-                "https://mcp-primeiramao.sagadatadriven.com.br",
-                "https://images.primeiramaosaga.com.br",
-                "https://www.primeiramaosaga.com.br",
-            ],
-        },
-    },
-)
+@mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app", meta=_WIDGET_CSP_META)
 async def _resource_vehicle_offers() -> str:
-    """HTML autossuficiente do widget — CSS e JS inlined para evitar bloqueio CSP.
+    """HTML autossuficiente — CSS e JS inlined, hashes no openai/widgetCSP.
 
-    Externas (script-src/style-src) são sempre bloqueadas no sandbox do ChatGPT Apps
-    porque 'self' aponta para o domínio interno do sandbox, não para o servidor MCP.
-    Inlining elimina qualquer referência externa.
+    Os hashes SHA-256 em _WIDGET_CSP_META foram calculados ao startup sobre
+    exatamente _CSS_CONTENT e _JS_CONTENT — sem whitespace extra, sem leitura
+    de arquivo aqui. O conteúdo entre <style> e <script> deve ser byte-idêntico
+    ao que foi hasheado.
     """
-    with open(os.path.join(_UI_DIR, "vehicle-offers.css"), "r", encoding="utf-8") as f:
-        css = f.read()
-    with open(os.path.join(_UI_DIR, "vehicle-offers.js"), "r", encoding="utf-8") as f:
-        js = f.read()
     return (
         '<!DOCTYPE html>\n'
         '<html lang="pt-BR">\n'
         '<head>\n'
         '  <meta charset="UTF-8">\n'
         '  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f'  <style>\n{css}\n  </style>\n'
+        f'  <style>{_CSS_CONTENT}</style>\n'
         '</head>\n'
         '<body>\n'
         '  <div id="app">Carregando ofertas...</div>\n'
-        f'  <script>\n{js}\n  </script>\n'
+        f'  <script>{_JS_CONTENT}</script>\n'
         '</body>\n'
         '</html>'
     )
