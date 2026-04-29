@@ -130,11 +130,29 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     except Exception as e:
         buscar_detail = {"error": str(e)}
 
+    # ── Wire format: o que tools/list envia de fato ao ChatGPT ──
+    wire_out = []
+    try:
+        tools = await mcp.list_tools()
+        for t in (tools or []):
+            try:
+                mcp_tool   = t.to_mcp_tool()
+                dumped     = mcp_tool.model_dump(exclude_none=False)
+                wire_out.append({
+                    "name":  dumped.get("name"),
+                    "_meta": dumped.get("_meta"),
+                })
+            except Exception as ex:
+                wire_out.append({"name": t.name, "wire_error": str(ex)})
+    except Exception as e:
+        wire_out = [{"error": str(e)}]
+
     return JSONResponse({
         "transport":       os.getenv("MCP_TRANSPORT", "stdio"),
         "tools":           tools_out,
         "resources":       resources_out,
         "buscar_veiculos": buscar_detail,
+        "tools_wire":      wire_out,   # formato exato que o ChatGPT lê
     })
 
 
@@ -1080,7 +1098,7 @@ async def buscar_veiculos(
 @mcp.tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False),
     app=_APP_VENDA,
-    meta={"openai/outputTemplate": _WIDGET_URL},
+    meta={"openai/outputTemplate": "ui://vehicle-offers"},
 )
 async def exibir_formulario_venda(
     veiculo_descricao: str,
