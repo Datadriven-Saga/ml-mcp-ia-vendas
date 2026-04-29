@@ -7,6 +7,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import json
 import re
 import unicodedata
 import urllib.parse
@@ -896,10 +897,10 @@ async def buscar_veiculo(
 @mcp.tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False),
     app=_APP_COMPRA,
-    # openai/outputTemplate no tool descriptor (não no result) aponta para o
-    # MCP resource uri://. O ChatGPT busca esse recurso via protocolo MCP e
-    # carrega o HTML como widget iframe.
-    meta={"openai/outputTemplate": "ui://vehicle-offers"},
+    meta={
+        "openai/outputTemplate": "ui://vehicle-offers",
+        "ui": {"resourceUri": "ui://vehicle-offers"},
+    },
 )
 async def buscar_veiculos(
     cidade: str,
@@ -916,6 +917,11 @@ async def buscar_veiculos(
 ):
     """
     Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
+
+    ═══ RENDERIZAÇÃO — REGRA ABSOLUTA ═══
+    Quando esta tool retornar structuredContent.type='vehicle_cards', NÃO gere lista,
+    tabela, bullets ou resumo dos veículos no chat. Use APENAS o content.text como
+    fallback e deixe o componente ui://vehicle-offers renderizar os cards.
 
     ═══ REGRA ABSOLUTA — ANTES DE CHAMAR ═══
     CHAME IMEDIATAMENTE assim que cidade for conhecida.
@@ -997,23 +1003,22 @@ async def buscar_veiculos(
 
     logger.info(f"[buscar_veiculos] → widget | n={n} | exibindo={len(veiculos_exibir)} | url={widget_url}")
 
+    sc = {
+        "type":          "vehicle_cards",
+        "vehicles":      cards,
+        "searchContext": {
+            "city":  cidade.upper(),
+            "store": ", ".join(nomes_lojas),
+        },
+    }
+
     return _ToolResult(
         content=TextContent(
             type="text",
-            text=f"[widget exibido] {mensagem_header}. NÃO adicione texto nem pergunte filtros.",
+            text=f"Encontrei {n} veículos em {cidade.upper()}. Carregando os cards abaixo.",
         ),
-        # structuredContent: ChatGPT requer vehicles aqui para entregar ao widget.
-        # O campo content (acima) instrui o modelo a não reprocessar esses dados.
-        structured_content={
-            "vehicles": cards,
-            "searchContext": {
-                "city":  cidade.upper(),
-                "store": ", ".join(nomes_lojas),
-            },
-        },
-        meta={
-            "ui": {"layout": "card_grid"},
-        },
+        structured_content=sc,
+        meta={"ui": {"layout": "card_grid"}},
     )
 
 

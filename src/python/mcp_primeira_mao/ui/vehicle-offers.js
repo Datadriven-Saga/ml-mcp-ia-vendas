@@ -1520,11 +1520,10 @@
     /* JSON-RPC 2.0 — OpenAI Apps SDK: resultado da tool após execução.
      *
      * Protocolo oficial (Apps SDK docs):
-     *   params.structuredContent → visível ao modelo E ao widget (dados concisos)
-     *   params._meta             → exclusivo do widget, invisível ao modelo (dados pesados)
+     *   params.structuredContent → visível ao modelo E ao widget
+     *   params._meta             → exclusivo do widget
      *
-     * Os cards de veículos ficam em _meta.items para que o modelo não os veja
-     * e não gere tabela/markdown em cima deles.
+     * Schema esperado: structuredContent = { type: "vehicle_cards", vehicles: [...] }
      */
     if (ev.data.jsonrpc === '2.0' && ev.data.method === 'ui/notifications/tool-result') {
       dbgLog('← tool-result', ev.data.params);
@@ -1554,22 +1553,29 @@
         return;
       }
 
-      /* ── Modo compra: lê de structuredContent.vehicles (contrato principal) ── */
-      if (Array.isArray(sc.vehicles)) {
-        render({
-          vehicles:      sc.vehicles,
-          searchContext: sc.searchContext || {},
-        }, {});
-        return;
-      }
+      /* ── Modo compra: schema { type: "vehicle_cards", vehicles: [...] } ── */
+      var rawList = (sc.type === 'vehicle_cards' && Array.isArray(sc.vehicles))
+        ? sc.vehicles
+        : (Array.isArray(sc.vehicles) ? sc.vehicles : null)
+        || (Array.isArray(meta.items) ? meta.items  : null);
 
-      /* ── Fallback: _meta.items (compatibilidade com versões anteriores) ── */
-      if (Array.isArray(meta.items)) {
-        render({
-          vehicles:      meta.items,
-          searchContext: meta.searchContext || {},
-        }, {});
-      }
+      if (!rawList) { showState('emp'); return; }
+
+      /* Valida campos obrigatórios de cada veículo */
+      var vehicleList = rawList.filter(function (v) {
+        if (!v || typeof v !== 'object') return false;
+        var hasTitle = !!(v.title || v.makeName);
+        var imgUrl   = v.imageUrl || v.url_imagem || '';
+        var hasImg   = typeof imgUrl === 'string' && imgUrl.indexOf('https://') === 0;
+        return hasTitle && hasImg;
+      });
+
+      dbgLog('vehicles válidos', vehicleList.length + '/' + rawList.length);
+
+      render({
+        vehicles:      vehicleList,
+        searchContext: sc.searchContext || meta.searchContext || {},
+      }, {});
       return;
     }
 
