@@ -3,34 +3,37 @@ console.log("[vehicle-offers] inline JS carregado");
 (function () {
   'use strict';
 
-  var TRUSTED_ORIGINS = ['https://chatgpt.com', 'https://chat.openai.com'];
-
   function log() {
     var args = Array.prototype.slice.call(arguments);
     args.unshift('[vehicle-offers]');
     console.log.apply(console, args);
   }
 
-  function getToolOutput() {
-    return (window.openai && window.openai.toolOutput) ? window.openai.toolOutput : null;
+  /* ── Bridge: lê toolOutput do proxy window.openai ── */
+
+  function getStructuredContentFromToolOutput() {
+    var output = window.openai && window.openai.toolOutput;
+    log('toolOutput', output);
+    if (!output) return null;
+    if (output.type === 'vehicle_cards' || output.mode === 'sell') return output;
+    var sc = output.structuredContent;
+    if (sc && (sc.type === 'vehicle_cards' || sc.mode === 'sell')) return sc;
+    return null;
   }
 
-  function extractStructuredContent(payload) {
-    if (!payload) return null;
-    // payload direto: { type, vehicles } ou { mode: 'sell' }
-    if (payload.type === 'vehicle_cards' || payload.mode === 'sell') return payload;
-    // toolOutput: { structuredContent: { type, vehicles } }
-    var sc = payload.structuredContent;
-    if (sc && (sc.type === 'vehicle_cards' || sc.mode === 'sell')) return sc;
-    // postMessage: { params: { structuredContent: … } }
-    var psc = payload.params && payload.params.structuredContent;
-    if (psc && (psc.type === 'vehicle_cards' || psc.mode === 'sell')) return psc;
-    // postMessage: { toolOutput: { structuredContent: … } } ou { toolOutput: { type, … } }
-    var to = payload.toolOutput;
-    if (to) {
-      if (to.type === 'vehicle_cards' || to.mode === 'sell') return to;
-      var tosc = to.structuredContent;
-      if (tosc && (tosc.type === 'vehicle_cards' || tosc.mode === 'sell')) return tosc;
+  /* ── Extrai structuredContent de mensagens postMessage ── */
+
+  function extractFromMessage(data) {
+    if (!data) return null;
+    var candidates = [
+      data.params  && data.params.structuredContent,
+      data.toolOutput && data.toolOutput.structuredContent,
+      data.structuredContent,
+      data.params  && data.params.toolOutput && data.params.toolOutput.structuredContent,
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      var c = candidates[i];
+      if (c && (c.type === 'vehicle_cards' || c.mode === 'sell')) return c;
     }
     return null;
   }
@@ -103,17 +106,14 @@ console.log("[vehicle-offers] inline JS carregado");
 
     var card = el('article', 'sell-card');
 
-    /* badge */
     var badge = el('span', 'vehicle-body__brand');
     badge.appendChild(txt('AVALIAÇÃO'));
     card.appendChild(badge);
 
-    /* título */
     var titleEl = el('h3', 'vehicle-body__title');
     titleEl.appendChild(txt(sc.veiculo || 'Seu veículo'));
     card.appendChild(titleEl);
 
-    /* specs */
     var specParts = [];
     if (sc.placa) specParts.push('Placa: ' + sc.placa);
     var kmStr = sc.km_fmt || fmtKm(sc.km) || '';
@@ -124,7 +124,6 @@ console.log("[vehicle-offers] inline JS carregado");
       card.appendChild(specs);
     }
 
-    /* proposta */
     if (sc.proposta) {
       var propLabel = el('p', 'sell-card__label');
       propLabel.appendChild(txt('Proposta Saga'));
@@ -134,12 +133,10 @@ console.log("[vehicle-offers] inline JS carregado");
       card.appendChild(price);
     }
 
-    /* hint */
     var hint = el('p', 'sell-card__hint');
     hint.appendChild(txt('📲 Informe seus dados — um consultor entra em contato via WhatsApp'));
     card.appendChild(hint);
 
-    /* inputs */
     var nameInput = el('input', 'sell-form__input');
     nameInput.setAttribute('type', 'text');
     nameInput.setAttribute('placeholder', 'Seu nome completo');
@@ -160,16 +157,13 @@ console.log("[vehicle-offers] inline JS carregado");
     var telErr = el('p', 'sell-form__error');
     card.appendChild(telErr);
 
-    /* máscara */
     telInput.addEventListener('input', function () {
       this.value = maskTel(this.value);
     });
 
-    /* feedback */
     var feedback = el('div', 'sell-card__feedback');
     card.appendChild(feedback);
 
-    /* botão */
     var btn = el('button', 'btn btn--primary sell-form__btn');
     btn.setAttribute('type', 'button');
     btn.appendChild(txt('Confirmar contato via WhatsApp'));
@@ -230,6 +224,10 @@ console.log("[vehicle-offers] inline JS carregado");
     var div = el('div', 'empty');
     div.appendChild(txt(message || 'Nenhum veículo encontrado.'));
     app.appendChild(div);
+  }
+
+  function renderLoading(message) {
+    renderEmpty(message || 'Carregando ofertas...');
   }
 
   function buildCard(vehicle) {
@@ -328,57 +326,65 @@ console.log("[vehicle-offers] inline JS carregado");
   /* ── Init ── */
 
   var _rendered = false;
-  var _fallbackTimer = null;
 
   function tryRender(sc) {
     if (_rendered) return;
     _rendered = true;
-    if (_fallbackTimer) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
     render(sc);
   }
 
   function init() {
-    log('init');
+    log('DOMContentLoaded');
     log('window.openai', window.openai);
 
-    var output = getToolOutput();
-    log('toolOutput', output);
-    var sc0 = extractStructuredContent(output);
-    if (sc0) { tryRender(sc0); return; }
+    var sc = getStructuredContentFromToolOutput();
+    if (sc) { tryRender(sc); return; }
 
-    /* Listener único — cobre JSON-RPC Apps SDK e postMessage genérico */
+    renderLoading('Carregando ofertas...');
+
+    /* Listener para todos os postMessages — loga o formato real do bridge */
     window.addEventListener('message', function (event) {
-      var msg = event.data;
-      log('raw postMessage', msg);
-      if (!msg) return;
+      log('raw message', event.data);
+      var data = event.data;
+      if (!data) return;
 
-      /* JSON-RPC oficial Apps SDK: ui/notifications/tool-result */
-      if (msg.jsonrpc === '2.0' && msg.method === 'ui/notifications/tool-result') {
-        var trSc = msg.params && msg.params.structuredContent;
+      /* JSON-RPC: ui/notifications/tool-result (Apps SDK oficial) */
+      if (data.jsonrpc === '2.0' && data.method === 'ui/notifications/tool-result') {
+        var trSc = data.params && data.params.structuredContent;
         log('tool-result structuredContent', trSc);
-        var parsed = extractStructuredContent(trSc || msg.params);
-        if (parsed) { tryRender(parsed); return; }
+        if (trSc && (trSc.type === 'vehicle_cards' || trSc.mode === 'sell')) { tryRender(trSc); return; }
       }
 
-      /* openai:set_globals (variante de alguns clientes) */
-      if (msg.method === 'openai:set_globals') {
-        var globals = (msg.params && msg.params.globals) || (msg.detail && msg.detail.globals);
-        var gSc = extractStructuredContent(globals && globals.toolOutput);
-        if (gSc) { tryRender(gSc); return; }
+      /* openai:set_globals */
+      if (data.method === 'openai:set_globals') {
+        var globals = (data.params && data.params.globals) || (data.detail && data.detail.globals);
+        var gOutput = globals && globals.toolOutput;
+        if (gOutput) {
+          var gSc = (gOutput.type === 'vehicle_cards' || gOutput.mode === 'sell')
+            ? gOutput : gOutput.structuredContent;
+          if (gSc && (gSc.type === 'vehicle_cards' || gSc.mode === 'sell')) { tryRender(gSc); return; }
+        }
       }
 
-      /* fallback genérico — tenta extrair de qualquer formato */
-      var fromMsg = extractStructuredContent(msg);
+      /* fallback genérico */
+      var fromMsg = extractFromMessage(data);
       if (fromMsg) { tryRender(fromMsg); }
     });
 
-    /* Após 5s sem dados: mensagem suave, não erro definitivo */
-    _fallbackTimer = setTimeout(function () {
-      if (!_rendered) {
-        log('5s sem dados — aguardando bridge');
-        renderEmpty('Aguardando dados do ChatGPT...');
+    /* window.openai.addEventListener (se o SDK expuser) */
+    try {
+      if (window.openai && typeof window.openai.addEventListener === 'function') {
+        window.openai.addEventListener('toolOutput', function (event) {
+          log('openai toolOutput event', event);
+          var output = (event && event.detail) || event;
+          var evSc = (output && (output.type === 'vehicle_cards' || output.mode === 'sell'))
+            ? output : (output && output.structuredContent);
+          if (evSc && (evSc.type === 'vehicle_cards' || evSc.mode === 'sell')) tryRender(evSc);
+        });
       }
-    }, 5000);
+    } catch (err) {
+      log('openai event listener unavailable', err);
+    }
   }
 
   if (document.readyState === 'loading') {

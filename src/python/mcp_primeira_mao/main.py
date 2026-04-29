@@ -134,19 +134,28 @@ async def _debug_inspect(request: Request) -> JSONResponse:
                                              "src=\"https://mcp-primeiramao"])
         _bad_css = any(p in _full for p in ["/ui/vehicle-offers.css", "/static/vehicle-offers.css",
                                              "href=\"https://mcp-primeiramao"])
+        _js = _JS_CONTENT
         html_preview = {
-            "total_chars":                len(_full),
-            "css_chars":                  len(_CSS_CONTENT),
-            "js_chars":                   len(_JS_CONTENT),
-            "has_style_tag":              "<style>" in _full,
-            "has_script_tag":             "<script>" in _full,
-            "no_external_js":             not _bad_js,
-            "no_external_css":            not _bad_css,
-            "css_hash":                   _CSS_HASH or "ERRO_HASH",
-            "js_hash":                    _JS_HASH  or "ERRO_HASH",
-            "widget_csp_script_sources":  _WIDGET_CSP_META.get("openai/widgetCSP", {}).get("script_sources"),
-            "widget_csp_style_sources":   _WIDGET_CSP_META.get("openai/widgetCSP", {}).get("style_sources"),
-            "head_preview":               _full[:500],
+            "total_chars":                   len(_full),
+            "css_chars":                     len(_CSS_CONTENT),
+            "js_chars":                      len(_js),
+            "has_style_tag":                 "<style>" in _full,
+            "has_script_tag":                "<script>" in _full,
+            "no_external_js":                not _bad_js,
+            "no_external_css":               not _bad_css,
+            # Verificações de padrões proibidos no JS
+            "contains_toolResponse":         "toolResponse" in _js,
+            "contains_openai_structuredContent": "openai.structuredContent" in _js,
+            "contains_polling":              "polling" in _js,
+            "contains_setInterval":          "setInterval" in _js,
+            "contains_requestModel":         "requestModel" in _js,
+            "contains_toolOutput":           "toolOutput" in _js,
+            # Hashes CSP
+            "css_hash":                      _CSS_HASH or "ERRO_HASH",
+            "js_hash":                       _JS_HASH  or "ERRO_HASH",
+            "widget_csp_script_sources":     _WIDGET_CSP_META.get("openai/widgetCSP", {}).get("script_sources"),
+            "widget_csp_style_sources":      _WIDGET_CSP_META.get("openai/widgetCSP", {}).get("style_sources"),
+            "head_preview":                  _full[:500],
         }
     except Exception as e:
         html_preview = {"error": str(e)}
