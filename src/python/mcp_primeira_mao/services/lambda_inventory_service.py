@@ -13,7 +13,7 @@ import json
 import math
 from config import LAMBDA_ESTOQUE_URL, LAMBDA_API_KEY, logger
 
-LAMBDA_TIMEOUT = 12
+LAMBDA_TIMEOUT = 30
 
 
 def _s(val) -> str:

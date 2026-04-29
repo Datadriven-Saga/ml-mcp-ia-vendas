@@ -1537,8 +1537,13 @@
           },
           searchContext: { city: 'GOIÂNIA/GO' },
         }, {});
+      } else if (Array.isArray(sc.vehicles)) {
+        /* Modo compra: dados chegam diretamente no structuredContent — sem chamada de API. */
+        render({
+          vehicles:      sc.vehicles,
+          searchContext: sc.searchContext || {},
+        }, {});
       }
-      /* Modo compra: a fetch da API já foi iniciada via toolInput em waitForData(). */
       return;
     }
 

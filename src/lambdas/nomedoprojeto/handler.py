@@ -49,7 +49,10 @@ def _sanitize(value: str) -> str:
 
 
 _ACENTOS = "áàâãäéèêëíìîïóòôõöúùûüçÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇ"
-_SIMPLES  = "aaaaaeeeeiiiioooooouuuucAAAAEEEEIIIIOOOOOUUUUC"
+_SIMPLES = (
+    "a" * 5 + "e" * 4 + "i" * 4 + "o" * 5 + "u" * 4 + "c" +
+    "A" * 5 + "E" * 4 + "I" * 4 + "O" * 5 + "U" * 4 + "C"
+)
 
 def _norm_sql(col: str) -> str:
     """Expressão SQL que remove acentos e coloca em minúsculo (Athena/Presto)."""
@@ -75,7 +78,6 @@ def _build_query(params: dict) -> str:
 
     cidade_norm = _sanitize(_norm_val(cidade))
     filters = [
-        "d.status = 1",
         f"{_norm_sql('c.\"name\"')} = '{cidade_norm}'",
     ]
 

@@ -943,18 +943,27 @@ async def buscar_veiculos(
 
     logger.info(f"[buscar_veiculos] Chamada | cidade='{cidade}' | consulta='{consulta}' | filtros={filtros}")
 
-    # Pré-valida: verifica se Lambda tem resultados para a cidade+filtros
     veiculos_brutos = await LambdaInventoryService.buscar(cidade, filtros or None)
 
-    if not veiculos_brutos and not _LAMBDA_APENAS:
-        # FALLBACK MOBIAUTO — desabilitado (_LAMBDA_APENAS = True)
-        logger.warning(f"[buscar_veiculos] Lambda vazia — fallback desabilitado para '{cidade}'")
-
     if not veiculos_brutos:
-        logger.warning(f"[buscar_veiculos] Nenhum veículo encontrado para cidade='{cidade}' filtros={filtros}")
+        logger.warning(f"[buscar_veiculos] Lambda retornou vazio para '{cidade}'")
         return f"Não encontramos veículos disponíveis em {cidade} com esses critérios."
 
     n = len(veiculos_brutos)
+
+    # Filtra com imagem e aplica scoring por consulta (texto livre)
+    veiculos_com_img = [v for v in veiculos_brutos if v.get("url_imagem")]
+    if consulta:
+        palavras = _extrair_palavras_chave(consulta)
+        if palavras:
+            scored = [(v, _score_veiculo(v, palavras)) for v in veiculos_com_img]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            hits = [v for v, s in scored if s > 0]
+            veiculos_exibir = (hits or veiculos_com_img)[:20]
+        else:
+            veiculos_exibir = veiculos_com_img[:20]
+    else:
+        veiculos_exibir = veiculos_com_img[:20]
 
     # Monta URL do widget com todos os parâmetros de busca
     url_params: dict = {"cidade": cidade}
@@ -964,20 +973,26 @@ async def buscar_veiculos(
     widget_url = _WIDGET_URL + "?" + urllib.parse.urlencode(url_params)
 
     filtro_desc = ", ".join(f"{k}: {v}" for k, v in filtros.items())
-    texto = (
+    mensagem_header = (
         f"Encontrei {n} veículos em {cidade}"
         + (f" · {filtro_desc}" if filtro_desc else "")
-        + "."
     )
 
-    logger.info(f"[buscar_veiculos] → widget | n={n} | url={widget_url}")
+    cards = [_veiculo_para_card(v) for v in veiculos_exibir]
+    nomes_lojas = list({v.get("loja_unidade", "") for v in veiculos_exibir if v.get("loja_unidade")})
+
+    logger.info(f"[buscar_veiculos] → widget | n={n} | exibindo={len(veiculos_exibir)} | url={widget_url}")
 
     return _ToolResult(
-        content=TextContent(type="text", text=texto),
+        content=TextContent(type="text", text=mensagem_header),
         structured_content={
-            "cidade":   cidade,
-            "consulta": consulta or "",
-            **{k: str(v) for k, v in filtros.items()},
+            "vehicles": cards,
+            "searchContext": {
+                "city":    cidade.upper(),
+                "store":   ", ".join(nomes_lojas),
+                "total":   n,
+                "consulta": consulta or "",
+            },
         },
         meta={
             "openai/outputTemplate": widget_url,
