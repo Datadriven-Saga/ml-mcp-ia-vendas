@@ -1517,28 +1517,54 @@
     if (!isTrustedOrigin(ev.origin)) return;
     if (!ev.data || typeof ev.data !== 'object') return;
 
-    /* JSON-RPC 2.0 — OpenAI Apps SDK: resultado da tool após execução */
+    /* JSON-RPC 2.0 — OpenAI Apps SDK: resultado da tool após execução.
+     *
+     * Protocolo oficial (Apps SDK docs):
+     *   params.structuredContent → visível ao modelo E ao widget (dados concisos)
+     *   params._meta             → exclusivo do widget, invisível ao modelo (dados pesados)
+     *
+     * Os cards de veículos ficam em _meta.items para que o modelo não os veja
+     * e não gere tabela/markdown em cima deles.
+     */
     if (ev.data.jsonrpc === '2.0' && ev.data.method === 'ui/notifications/tool-result') {
       dbgLog('← tool-result', ev.data.params);
       if (APP.data) return; /* widget já renderizou — ignora */
-      var sc = ev.data.params && ev.data.params.structuredContent;
-      if (!sc || typeof sc !== 'object') return;
-      if (sc.mode === 'sell') {
-        var propStr2 = String(sc.proposta || '').trim();
+
+      var params = ev.data.params || {};
+      var sc     = params.structuredContent || {};
+      var meta   = params._meta             || {};
+
+      /* ── Modo venda ── */
+      var isSellMode = sc.mode === 'sell' || meta.mode === 'sell';
+      if (isSellMode) {
+        var sellSrc  = meta.mode === 'sell' ? meta : sc;
+        var propStr2 = String(sellSrc.proposta || '').trim();
         if (propStr2 && propStr2.indexOf('R$') === -1) propStr2 = 'R$ ' + propStr2;
         render({
           mode: 'sell',
           evaluation: {
-            vehicleDescription: String(sc.veiculo || ''),
-            plate:              String(sc.placa    || ''),
-            km:                 String(sc.km       || ''),
-            kmFormatted:        sc.km_fmt || fmtKm(sc.km) || '',
+            vehicleDescription: String(sellSrc.veiculo || ''),
+            plate:              String(sellSrc.placa    || ''),
+            km:                 String(sellSrc.km       || ''),
+            kmFormatted:        sellSrc.km_fmt || fmtKm(sellSrc.km) || '',
             proposal:           propStr2,
           },
           searchContext: { city: 'GOIÂNIA/GO' },
         }, {});
-      } else if (Array.isArray(sc.vehicles)) {
-        /* Modo compra: dados chegam diretamente no structuredContent — sem chamada de API. */
+        return;
+      }
+
+      /* ── Modo compra: lê de _meta.items (dados pesados, invisíveis ao modelo) ── */
+      if (Array.isArray(meta.items)) {
+        render({
+          vehicles:      meta.items,
+          searchContext: meta.searchContext || {},
+        }, {});
+        return;
+      }
+
+      /* ── Fallback: structuredContent.vehicles (compatibilidade) ── */
+      if (Array.isArray(sc.vehicles)) {
         render({
           vehicles:      sc.vehicles,
           searchContext: sc.searchContext || {},

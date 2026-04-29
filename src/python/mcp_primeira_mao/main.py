@@ -128,7 +128,17 @@ def _serve_ui_file(filename: str) -> Response:
 
 @mcp.custom_route("/ui/vehicle-offers.html", methods=["GET"])
 async def _serve_ui_html(request: Request) -> Response:
-    return _serve_ui_file("vehicle-offers.html")
+    # text/html;profile=mcp-app é o MIME type oficial do Apps SDK (OpenAI docs).
+    # Sem ele o ChatGPT não reconhece a resposta como widget e cai no fallback textual.
+    path = os.path.join(_UI_DIR, "vehicle-offers.html")
+    if not os.path.isfile(path):
+        return Response(status_code=404)
+    headers = {
+        "Content-Security-Policy": _UI_CSP,
+        "X-Content-Type-Options":  "nosniff",
+        "Cache-Control":           "no-store",
+    }
+    return FileResponse(path, media_type="text/html;profile=mcp-app", headers=headers)
 
 @mcp.custom_route("/ui/vehicle-offers.css", methods=["GET"])
 async def _serve_ui_css(request: Request) -> Response:
@@ -139,7 +149,7 @@ async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-@mcp.resource("ui://vehicle-offers", mime_type="text/html")
+@mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app")
 async def _resource_vehicle_offers() -> str:
     """HTML do widget de veículos — carregado como recurso MCP pelo ChatGPT Apps."""
     with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as f:
@@ -985,17 +995,23 @@ async def buscar_veiculos(
 
     return _ToolResult(
         content=TextContent(type="text", text=mensagem_header),
+        # structuredContent: dados concisos visíveis ao modelo — sem array de veículos
+        # para evitar que o modelo gere tabela/markdown em cima deles.
         structured_content={
-            "vehicles": cards,
-            "searchContext": {
-                "city":    cidade.upper(),
-                "store":   ", ".join(nomes_lojas),
-                "total":   n,
-                "consulta": consulta or "",
-            },
+            "title": mensagem_header,
+            "total": n,
+            "city":  cidade.upper(),
         },
+        # _meta: entregue apenas ao widget, nunca chega ao modelo (Apps SDK docs).
+        # Aqui ficam os cards completos e o searchContext.
         meta={
             "openai/outputTemplate": widget_url,
+            "ui": {"layout": "card_grid"},
+            "items": cards,
+            "searchContext": {
+                "city":  cidade.upper(),
+                "store": ", ".join(nomes_lojas),
+            },
         },
     )
 
