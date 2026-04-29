@@ -92,28 +92,62 @@ async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
 # Útil para confirmar que openai/outputTemplate está no descriptor.
 @mcp.custom_route("/debug/inspect", methods=["GET"])
 async def _debug_inspect(request: Request) -> JSONResponse:
+    # Descobre quais atributos relacionados a tools/resources o FastMCP expõe
+    mcp_attrs = sorted([a for a in dir(mcp) if not a.startswith("__")])
+
+    # ── Tools ──
+    tools_out = []
     try:
-        tools_raw = mcp._tool_manager.list_tools()
-        tools_out = []
-        for t in tools_raw:
-            tools_out.append({
-                "name":        t.name,
-                "description": (t.description or "")[:120],
-                "_meta":       getattr(t, "_meta", None) or getattr(t, "meta", None),
-            })
+        # Tenta atributos conhecidos das versões 2.x e 3.x do FastMCP
+        mgr = (
+            getattr(mcp, "_tool_manager",  None)
+            or getattr(mcp, "tool_manager", None)
+        )
+        if mgr and hasattr(mgr, "list_tools"):
+            for t in mgr.list_tools():
+                tools_out.append({
+                    "name":  t.name,
+                    "_meta": getattr(t, "_meta", None) or getattr(t, "meta", None),
+                })
+        else:
+            # Fallback: procura em qualquer atributo tipo dict com tools
+            for attr in mcp_attrs:
+                val = getattr(mcp, attr, None)
+                if isinstance(val, dict) and val and all(hasattr(v, "name") for v in val.values()):
+                    for name, t in val.items():
+                        tools_out.append({
+                            "name":  name,
+                            "_meta": getattr(t, "_meta", None) or getattr(t, "meta", None),
+                        })
+                    break
     except Exception as e:
         tools_out = [{"error": str(e)}]
 
+    # ── Resources ──
+    resources_out = []
     try:
-        res_raw = mcp._resource_manager.list_resources()
-        resources_out = [{"uri": str(r.uri), "mime_type": r.mime_type} for r in res_raw]
+        rmgr = (
+            getattr(mcp, "_resource_manager",  None)
+            or getattr(mcp, "resource_manager", None)
+        )
+        if rmgr and hasattr(rmgr, "list_resources"):
+            for r in rmgr.list_resources():
+                resources_out.append({"uri": str(r.uri), "mime_type": getattr(r, "mime_type", None)})
+        else:
+            for attr in mcp_attrs:
+                val = getattr(mcp, attr, None)
+                if isinstance(val, dict) and val and all(hasattr(v, "uri") for v in val.values()):
+                    for uri, r in val.items():
+                        resources_out.append({"uri": str(uri), "mime_type": getattr(r, "mime_type", None)})
+                    break
     except Exception as e:
         resources_out = [{"error": str(e)}]
 
     return JSONResponse({
-        "tools":     tools_out,
-        "resources": resources_out,
-        "transport": os.getenv("MCP_TRANSPORT", "stdio"),
+        "transport":  os.getenv("MCP_TRANSPORT", "stdio"),
+        "tools":      tools_out,
+        "resources":  resources_out,
+        "mcp_attrs":  mcp_attrs,   # lista completa — ajuda a descobrir o atributo certo
     })
 
 
