@@ -54,7 +54,7 @@ _APP_COMPRA = AppConfig(
 )
 
 _APP_VENDA = AppConfig(
-    resource_uri="ui://vehicle-offers",
+    resource_uri="ui://vehicle-sell",
     prefers_border=True,
     csp=ResourceCSP(
         connect_domains=["https://mcp-primeiramao.sagadatadriven.com.br"],
@@ -124,15 +124,9 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     # ── html_preview + inline_check ──────────────────────────────────────────
     html_preview = None
     try:
-        _embedded_debug = _safe_json_embed(_LAST_WIDGET_PAYLOAD)
-        _full = (
-            '<!DOCTYPE html>\n<html lang="pt-BR">\n<head>\n'
-            '  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-            f'  <style>{_CSS_CONTENT}</style>\n'
-            f'</head>\n<body>\n  <div id="app">Carregando ofertas...</div>\n'
-            f'  <script type="application/json" id="vehicle-data">{_embedded_debug}</script>\n'
-            f'  <script>{_JS_CONTENT}</script>\n</body>\n</html>'
-        )
+        _buy_debug  = _safe_json_embed(_LAST_BUY_PAYLOAD)
+        _sell_debug = _safe_json_embed(_LAST_SELL_PAYLOAD)
+        _full = _build_widget_html(_LAST_BUY_PAYLOAD, "Carregando ofertas...")
         _bad_js  = any(p in _full for p in ["/ui/vehicle-offers.js",  "/static/vehicle-offers.js",
                                              "src=\"https://mcp-primeiramao"])
         _bad_css = any(p in _full for p in ["/ui/vehicle-offers.css", "/static/vehicle-offers.css",
@@ -146,20 +140,21 @@ async def _debug_inspect(request: Request) -> JSONResponse:
             "has_script_tag":                "<script>" in _full,
             "no_external_js":                not _bad_js,
             "no_external_css":               not _bad_css,
-            # Verificações de padrões proibidos no JS
             "contains_toolResponse":         "toolResponse" in _js,
             "contains_openai_structuredContent": "openai.structuredContent" in _js,
-            "contains_polling":              "polling" in _js,
             "contains_setInterval":          "setInterval" in _js,
-            "contains_requestModel":         "requestModel" in _js,
             "contains_toolOutput":           "toolOutput" in _js,
-            # Payload embutido
             "html_contains_vehicle_data_script": 'id="vehicle-data"' in _full,
-            "last_widget_payload_exists":     _LAST_WIDGET_PAYLOAD is not None,
-            "last_widget_payload_type":       (_LAST_WIDGET_PAYLOAD or {}).get("type"),
-            "last_widget_payload_mode":       (_LAST_WIDGET_PAYLOAD or {}).get("mode"),
-            "last_widget_payload_vehicles":   len((_LAST_WIDGET_PAYLOAD or {}).get("vehicles", [])),
-            "vehicle_data_preview":           _embedded_debug[:200],
+            # Buy payload
+            "last_buy_payload_exists":        _LAST_BUY_PAYLOAD is not None,
+            "last_buy_payload_type":          (_LAST_BUY_PAYLOAD or {}).get("type"),
+            "last_buy_payload_vehicles":      len((_LAST_BUY_PAYLOAD or {}).get("vehicles", [])),
+            "buy_data_preview":               _buy_debug[:200],
+            # Sell payload
+            "last_sell_payload_exists":       _LAST_SELL_PAYLOAD is not None,
+            "last_sell_payload_mode":         (_LAST_SELL_PAYLOAD or {}).get("mode"),
+            "last_sell_payload_veiculo":      (_LAST_SELL_PAYLOAD or {}).get("veiculo"),
+            "sell_data_preview":              _sell_debug[:200],
             # Hashes CSP
             "css_hash":                      _CSS_HASH or "ERRO_HASH",
             "js_hash":                       _JS_HASH  or "ERRO_HASH",
@@ -209,17 +204,12 @@ async def _debug_inspect(request: Request) -> JSONResponse:
             _sc_dict = _sc if isinstance(_sc, dict) else {}
             _vehicles = _sc_dict.get("vehicles", [])
             tool_result_preview = {
-                # Formato do retorno
-                "raw_tool_result_type":              type(_call).__name__,
-                "has_structured_content_attr":       _sc is not None,
-                "raw_tool_result":                   str(_sc)[:500] if _sc else None,
-                # Diagnóstico de formato
-                "has_root_vehicle_cards":            isinstance(_sc, dict) and _sc.get("type") == "vehicle_cards",
-                "has_structuredContent_vehicle_cards": False,  # structured_content IS the root, não aninhado
-                "vehicles_count":                    len(_vehicles),
-                # Detalhes
-                "content_text":                      _content_text,
-                "first_vehicle_keys":                list(_vehicles[0].keys()) if _vehicles else [],
+                "raw_tool_result_type":    type(_call).__name__,
+                "has_structured_content":  _sc is not None,
+                "has_root_vehicle_cards":  isinstance(_sc, dict) and _sc.get("type") == "vehicle_cards",
+                "vehicles_count":          len(_vehicles),
+                "content_text":            _content_text,
+                "first_vehicle_keys":      list(_vehicles[0].keys()) if _vehicles else [],
             }
         else:
             tool_result_preview = {"raw": str(_call)[:300]}
@@ -284,12 +274,11 @@ _WIDGET_CSP_META: dict = {
     },
 }
 
-# ── Payload do último widget chamado — embutido no HTML do resource ──────────
-# Quando buscar_veiculos ou exibir_formulario_venda é chamado, armazena o sc.
-# Quando ui://vehicle-offers é lido (logo após a tool call), o HTML inclui o
-# dado via <script type="application/json" id="vehicle-data">. Isso é independente
-# de window.openai.toolOutput, que consistentemente chega null no ChatGPT Apps.
-_LAST_WIDGET_PAYLOAD: dict | None = None
+# ── Payloads separados por modo — sem race condition entre compra e venda ────
+# buscar_veiculos  → _LAST_BUY_PAYLOAD  → resource ui://vehicle-offers
+# exibir_formulario_venda → _LAST_SELL_PAYLOAD → resource ui://vehicle-sell
+_LAST_BUY_PAYLOAD:  dict | None = None
+_LAST_SELL_PAYLOAD: dict | None = None
 
 
 def _safe_json_embed(obj) -> str:
@@ -368,16 +357,9 @@ async def _serve_static_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-@mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app", meta=_WIDGET_CSP_META)
-async def _resource_vehicle_offers() -> str:
-    """HTML com dados embutidos em <script type='application/json' id='vehicle-data'>.
-
-    _LAST_WIDGET_PAYLOAD é preenchido por buscar_veiculos / exibir_formulario_venda
-    antes de o ChatGPT ler este resource. O JS lê o script tag antes de tentar
-    window.openai.toolOutput, eliminando a dependência do bridge que vem null.
-    O hash CSP cobre apenas o bloco JS executável — o JSON data tag não é JS.
-    """
-    embedded = _safe_json_embed(_LAST_WIDGET_PAYLOAD)
+def _build_widget_html(payload: dict | None, loading_text: str = "Carregando...") -> str:
+    """Monta o HTML inline do widget com o payload embutido."""
+    embedded = _safe_json_embed(payload)
     return (
         '<!DOCTYPE html>\n'
         '<html lang="pt-BR">\n'
@@ -387,12 +369,39 @@ async def _resource_vehicle_offers() -> str:
         f'  <style>{_CSS_CONTENT}</style>\n'
         '</head>\n'
         '<body>\n'
-        '  <div id="app">Carregando ofertas...</div>\n'
+        f'  <div id="app">{loading_text}</div>\n'
         f'  <script type="application/json" id="vehicle-data">{embedded}</script>\n'
         f'  <script>{_JS_CONTENT}</script>\n'
         '</body>\n'
         '</html>'
     )
+
+
+@mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app", meta=_WIDGET_CSP_META)
+async def _resource_vehicle_offers() -> str:
+    """Widget de compra — usa _LAST_BUY_PAYLOAD (separado do payload de venda)."""
+    return _build_widget_html(_LAST_BUY_PAYLOAD, "Carregando ofertas...")
+
+
+_WIDGET_SELL_CSP_META: dict = {
+    "openai/widgetDomain": "https://mcp-primeiramao.sagadatadriven.com.br",
+    "openai/widgetCSP": {
+        "connect_domains": [
+            "https://mcp-primeiramao.sagadatadriven.com.br",
+        ],
+        "resource_domains": [
+            "https://mcp-primeiramao.sagadatadriven.com.br",
+        ],
+        **( {"script_sources": [_JS_HASH], "style_sources": [_CSS_HASH]}
+            if _JS_HASH and _CSS_HASH else {} ),
+    },
+}
+
+
+@mcp.resource("ui://vehicle-sell", mime_type="text/html;profile=mcp-app", meta=_WIDGET_SELL_CSP_META)
+async def _resource_vehicle_sell() -> str:
+    """Widget de venda — usa _LAST_SELL_PAYLOAD (separado do payload de compra)."""
+    return _build_widget_html(_LAST_SELL_PAYLOAD, "Carregando formulário...")
 
 
 @mcp.resource("ui://vehicle-offers.css", mime_type="text/css")
@@ -1249,9 +1258,9 @@ async def buscar_veiculos(
         },
     }
 
-    # Embute no HTML do resource — independente de window.openai.toolOutput
-    global _LAST_WIDGET_PAYLOAD
-    _LAST_WIDGET_PAYLOAD = sc
+    # Embute no HTML do resource de compra — sem conflito com o resource de venda
+    global _LAST_BUY_PAYLOAD
+    _LAST_BUY_PAYLOAD = sc
 
     return _ToolResult(
         content=TextContent(
@@ -1265,7 +1274,7 @@ async def buscar_veiculos(
 @mcp.tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False),
     app=_APP_VENDA,
-    meta={"openai/outputTemplate": "ui://vehicle-offers"},
+    meta={"openai/outputTemplate": "ui://vehicle-sell"},
 )
 async def exibir_formulario_venda(
     veiculo_descricao: str,
@@ -1323,8 +1332,9 @@ async def exibir_formulario_venda(
         "proposta": proposta_str,
     }
 
-    global _LAST_WIDGET_PAYLOAD
-    _LAST_WIDGET_PAYLOAD = sell_sc
+    # Embute no HTML do resource de venda — sem conflito com o resource de compra
+    global _LAST_SELL_PAYLOAD
+    _LAST_SELL_PAYLOAD = sell_sc
 
     return _ToolResult(
         content=TextContent(type="text", text=texto),
@@ -1586,7 +1596,7 @@ async def diagnostico_registro(
 # FastMCP injeta "fastmcp": {"tags": []} em todo _meta via get_meta().
 # Isso é ruído desnecessário no descriptor — o ChatGPT lê apenas as chaves que conhece.
 _WIDGET_TOOLS = {"buscar_veiculos", "exibir_formulario_venda"}
-_WIDGET_RESOURCES = {"ui://vehicle-offers", "ui://vehicle-offers.css", "ui://vehicle-offers.js"}
+_WIDGET_RESOURCES = {"ui://vehicle-offers", "ui://vehicle-sell", "ui://vehicle-offers.css", "ui://vehicle-offers.js"}
 
 def _strip_fastmcp(meta: dict | None) -> dict | None:
     """Remove a chave 'fastmcp' injetada pelo FastMCP — não relevante para o ChatGPT."""
