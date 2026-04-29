@@ -104,13 +104,15 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     except Exception as e:
         tools_wire = [{"error": str(e)}]
 
-    # ── resources_wire: uri + mimeType camelCase (como o SDK serializa) ──
+    # ── resources_wire: uri + mimeType + _meta (como o SDK serializa) ──
     resources_wire = []
     try:
         for r in (await mcp.list_resources() or []):
+            mcp_res = r.to_mcp_resource()
             resources_wire.append({
-                "uri":      str(getattr(r, "uri", r)),
-                "mimeType": getattr(r, "mimeType", None) or getattr(r, "mime_type", None),
+                "uri":      str(mcp_res.uri),
+                "mimeType": mcp_res.mimeType,
+                "_meta":    mcp_res.meta,
             })
     except Exception as e:
         resources_wire = [{"error": str(e)}]
@@ -214,7 +216,23 @@ async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-@mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app")
+@mcp.resource(
+    "ui://vehicle-offers",
+    mime_type="text/html;profile=mcp-app",
+    meta={
+        "openai/widgetDomain": "https://mcp-primeiramao.sagadatadriven.com.br",
+        "openai/widgetCSP": {
+            "connect_domains": [
+                "https://mcp-primeiramao.sagadatadriven.com.br",
+            ],
+            "resource_domains": [
+                "https://mcp-primeiramao.sagadatadriven.com.br",
+                "https://images.primeiramaosaga.com.br",
+                "https://www.primeiramaosaga.com.br",
+            ],
+        },
+    },
+)
 async def _resource_vehicle_offers() -> str:
     """HTML do widget de veículos — carregado como recurso MCP pelo ChatGPT Apps."""
     with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as f:
@@ -1399,27 +1417,44 @@ async def diagnostico_registro(
 # FastMCP injeta "fastmcp": {"tags": []} em todo _meta via get_meta().
 # Isso é ruído desnecessário no descriptor — o ChatGPT lê apenas as chaves que conhece.
 _WIDGET_TOOLS = {"buscar_veiculos", "exibir_formulario_venda"}
+_WIDGET_RESOURCES = {"ui://vehicle-offers"}
 
-_orig_to_mcp_tool = None
-
-def _patch_tool_meta(tool_cls):
-    orig = tool_cls.to_mcp_tool
-
-    def _to_mcp_tool_clean(self, **overrides):
-        mcp_tool = orig(self, **overrides)
-        if mcp_tool.meta and self.name in _WIDGET_TOOLS:
-            clean = {k: v for k, v in mcp_tool.meta.items() if k != "fastmcp"}
-            mcp_tool.meta = clean if clean else None
-        return mcp_tool
-
-    tool_cls.to_mcp_tool = _to_mcp_tool_clean
+def _strip_fastmcp(meta: dict | None) -> dict | None:
+    """Remove a chave 'fastmcp' injetada pelo FastMCP — não relevante para o ChatGPT."""
+    if not meta:
+        return meta
+    clean = {k: v for k, v in meta.items() if k != "fastmcp"}
+    return clean if clean else None
 
 try:
     from fastmcp.tools.base import Tool as _FastMCPTool
-    _patch_tool_meta(_FastMCPTool)
-    logger.info(f"[meta-patch] to_mcp_tool patcheado — 'fastmcp' removido do _meta de: {_WIDGET_TOOLS}")
+    _orig_tool_to_mcp = _FastMCPTool.to_mcp_tool
+
+    def _to_mcp_tool_clean(self, **overrides):
+        mcp_tool = _orig_tool_to_mcp(self, **overrides)
+        if self.name in _WIDGET_TOOLS:
+            mcp_tool.meta = _strip_fastmcp(mcp_tool.meta)
+        return mcp_tool
+
+    _FastMCPTool.to_mcp_tool = _to_mcp_tool_clean
+    logger.info(f"[meta-patch] Tool.to_mcp_tool patcheado — 'fastmcp' removido de: {_WIDGET_TOOLS}")
 except Exception as _e:
-    logger.warning(f"[meta-patch] Falha ao patchear to_mcp_tool: {_e}")
+    logger.warning(f"[meta-patch] Falha ao patchear Tool.to_mcp_tool: {_e}")
+
+try:
+    from fastmcp.resources.base import Resource as _FastMCPResource
+    _orig_res_to_mcp = _FastMCPResource.to_mcp_resource
+
+    def _to_mcp_resource_clean(self, **overrides):
+        mcp_res = _orig_res_to_mcp(self, **overrides)
+        if str(getattr(self, "uri", "")) in _WIDGET_RESOURCES:
+            mcp_res.meta = _strip_fastmcp(mcp_res.meta)
+        return mcp_res
+
+    _FastMCPResource.to_mcp_resource = _to_mcp_resource_clean
+    logger.info(f"[meta-patch] Resource.to_mcp_resource patcheado — 'fastmcp' removido de: {_WIDGET_RESOURCES}")
+except Exception as _e:
+    logger.warning(f"[meta-patch] Falha ao patchear Resource.to_mcp_resource: {_e}")
 
 
 if __name__ == "__main__":
