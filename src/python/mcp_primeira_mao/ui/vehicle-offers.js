@@ -328,37 +328,57 @@ console.log("[vehicle-offers] inline JS carregado");
   /* ── Init ── */
 
   var _rendered = false;
+  var _fallbackTimer = null;
 
   function tryRender(sc) {
     if (_rendered) return;
     _rendered = true;
+    if (_fallbackTimer) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
     render(sc);
   }
 
   function init() {
-    log('DOMContentLoaded');
+    log('init');
+    log('window.openai', window.openai);
+
     var output = getToolOutput();
-    console.log('[vehicle-offers] toolOutput', output);
+    log('toolOutput', output);
+    var sc0 = extractStructuredContent(output);
+    if (sc0) { tryRender(sc0); return; }
 
-    var sc = extractStructuredContent(output);
-    if (sc) { tryRender(sc); return; }
-
+    /* Listener único — cobre JSON-RPC Apps SDK e postMessage genérico */
     window.addEventListener('message', function (event) {
-      var scFromMessage = extractStructuredContent(event.data);
-      if (scFromMessage) tryRender(scFromMessage);
+      var msg = event.data;
+      log('raw postMessage', msg);
+      if (!msg) return;
+
+      /* JSON-RPC oficial Apps SDK: ui/notifications/tool-result */
+      if (msg.jsonrpc === '2.0' && msg.method === 'ui/notifications/tool-result') {
+        var trSc = msg.params && msg.params.structuredContent;
+        log('tool-result structuredContent', trSc);
+        var parsed = extractStructuredContent(trSc || msg.params);
+        if (parsed) { tryRender(parsed); return; }
+      }
+
+      /* openai:set_globals (variante de alguns clientes) */
+      if (msg.method === 'openai:set_globals') {
+        var globals = (msg.params && msg.params.globals) || (msg.detail && msg.detail.globals);
+        var gSc = extractStructuredContent(globals && globals.toolOutput);
+        if (gSc) { tryRender(gSc); return; }
+      }
+
+      /* fallback genérico — tenta extrair de qualquer formato */
+      var fromMsg = extractStructuredContent(msg);
+      if (fromMsg) { tryRender(fromMsg); }
     });
 
-    var attempts = 0;
-    var timer = setInterval(function () {
-      attempts++;
-      var p2 = getToolOutput();
-      var sc2 = extractStructuredContent(p2);
-      if (sc2) { clearInterval(timer); tryRender(sc2); return; }
-      if (attempts >= 50) {
-        clearInterval(timer);
-        if (!_rendered) { log('timeout'); renderEmpty('Não recebi os dados. Tente novamente.'); }
+    /* Após 5s sem dados: mensagem suave, não erro definitivo */
+    _fallbackTimer = setTimeout(function () {
+      if (!_rendered) {
+        log('5s sem dados — aguardando bridge');
+        renderEmpty('Aguardando dados do ChatGPT...');
       }
-    }, 100);
+    }, 5000);
   }
 
   if (document.readyState === 'loading') {
