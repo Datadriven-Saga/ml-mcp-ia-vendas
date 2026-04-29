@@ -20,9 +20,18 @@ console.log("[vehicle-offers] JS carregado");
 
   function extractStructuredContent(payload) {
     if (!payload) return null;
+    // compra
     if (payload.type === 'vehicle_cards') return payload;
-    if (payload.structuredContent && payload.structuredContent.type === 'vehicle_cards') return payload.structuredContent;
-    if (payload.params && payload.params.structuredContent && payload.params.structuredContent.type === 'vehicle_cards') return payload.params.structuredContent;
+    // venda
+    if (payload.mode === 'sell') return payload;
+    // aninhado em structuredContent
+    var sc = payload.structuredContent;
+    if (sc) {
+      if (sc.type === 'vehicle_cards' || sc.mode === 'sell') return sc;
+    }
+    // aninhado em params.structuredContent (postMessage)
+    var psc = payload.params && payload.params.structuredContent;
+    if (psc && (psc.type === 'vehicle_cards' || psc.mode === 'sell')) return psc;
     return null;
   }
 
@@ -42,6 +51,14 @@ console.log("[vehicle-offers] JS carregado");
     var n = parseInt(String(v).replace(/\D/g, ''), 10);
     if (isNaN(n)) return '';
     return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' km';
+  }
+
+  function maskTel(v) {
+    var d = v.replace(/\D/g, '').slice(0, 11);
+    if (d.length <= 2)  return '(' + d;
+    if (d.length <= 6)  return '(' + d.slice(0,2) + ') ' + d.slice(2);
+    if (d.length <= 10) return '(' + d.slice(0,2) + ') ' + d.slice(2,6) + '-' + d.slice(6);
+    return '(' + d.slice(0,2) + ') ' + d.slice(2,7) + '-' + d.slice(7);
   }
 
   function safeUrl(url) {
@@ -64,7 +81,147 @@ console.log("[vehicle-offers] JS carregado");
     return document.createTextNode(str == null ? '' : String(str));
   }
 
-  /* ── Render ── */
+  /* ── Bridge: chama tool MCP via host ── */
+
+  function callTool(name, args) {
+    if (window.openai && typeof window.openai.callTool === 'function') {
+      return Promise.resolve(window.openai.callTool(name, args));
+    }
+    if (window.mcpBridge && typeof window.mcpBridge.callTool === 'function') {
+      return Promise.resolve(window.mcpBridge.callTool(name, args));
+    }
+    return Promise.reject(new Error('BRIDGE_UNAVAILABLE'));
+  }
+
+  /* ── Render: modo venda ── */
+
+  function renderSell(sc) {
+    log('renderSell', sc);
+    var app = document.getElementById('app');
+    if (!app) { log('ERRO: #app não encontrado'); return; }
+    app.innerHTML = '';
+
+    var card = el('article', 'sell-card');
+
+    /* badge */
+    var badge = el('span', 'vehicle-body__brand');
+    badge.appendChild(txt('AVALIAÇÃO'));
+    card.appendChild(badge);
+
+    /* título */
+    var titleEl = el('h3', 'vehicle-body__title');
+    titleEl.appendChild(txt(sc.veiculo || 'Seu veículo'));
+    card.appendChild(titleEl);
+
+    /* specs */
+    var specParts = [];
+    if (sc.placa) specParts.push('Placa: ' + sc.placa);
+    var kmStr = sc.km_fmt || fmtKm(sc.km) || '';
+    if (kmStr) specParts.push(kmStr);
+    if (specParts.length) {
+      var specs = el('p', 'vehicle-body__specs');
+      specs.appendChild(txt(specParts.join(' • ')));
+      card.appendChild(specs);
+    }
+
+    /* proposta */
+    if (sc.proposta) {
+      var propLabel = el('p', 'sell-card__label');
+      propLabel.appendChild(txt('Proposta Saga'));
+      card.appendChild(propLabel);
+      var price = el('p', 'vehicle-body__price');
+      price.appendChild(txt(sc.proposta));
+      card.appendChild(price);
+    }
+
+    /* hint */
+    var hint = el('p', 'sell-card__hint');
+    hint.appendChild(txt('📲 Informe seus dados — um consultor entra em contato via WhatsApp'));
+    card.appendChild(hint);
+
+    /* inputs */
+    var nameInput = el('input', 'sell-form__input');
+    nameInput.setAttribute('type', 'text');
+    nameInput.setAttribute('placeholder', 'Seu nome completo');
+    nameInput.setAttribute('maxlength', '100');
+    nameInput.setAttribute('autocomplete', 'name');
+    card.appendChild(nameInput);
+
+    var nameErr = el('p', 'sell-form__error');
+    card.appendChild(nameErr);
+
+    var telInput = el('input', 'sell-form__input');
+    telInput.setAttribute('type', 'tel');
+    telInput.setAttribute('placeholder', 'Telefone com DDD');
+    telInput.setAttribute('maxlength', '16');
+    telInput.setAttribute('autocomplete', 'tel');
+    card.appendChild(telInput);
+
+    var telErr = el('p', 'sell-form__error');
+    card.appendChild(telErr);
+
+    /* máscara */
+    telInput.addEventListener('input', function () {
+      this.value = maskTel(this.value);
+    });
+
+    /* feedback */
+    var feedback = el('div', 'sell-card__feedback');
+    card.appendChild(feedback);
+
+    /* botão */
+    var btn = el('button', 'btn btn--primary sell-form__btn');
+    btn.setAttribute('type', 'button');
+    btn.appendChild(txt('Confirmar contato via WhatsApp'));
+
+    btn.addEventListener('click', function () {
+      var nome = nameInput.value.trim();
+      var tel  = telInput.value.replace(/\D/g, '');
+
+      nameErr.textContent = '';
+      telErr.textContent  = '';
+
+      if (!nome || nome.length < 2) {
+        nameErr.textContent = 'Informe seu nome completo.';
+        nameInput.focus();
+        return;
+      }
+      if (tel.length < 10) {
+        telErr.textContent = 'Informe um telefone com DDD (10 ou 11 dígitos).';
+        telInput.focus();
+        return;
+      }
+
+      btn.disabled    = true;
+      btn.textContent = 'Aguarde...';
+
+      callTool('registrar_interesse_venda', {
+        nome_cliente:      nome,
+        telefone_cliente:  tel,
+        veiculo_descricao: sc.veiculo  || '',
+        placa:             sc.placa    || '',
+        km:                sc.km       || '',
+        valor_proposta:    sc.proposta || '',
+      })
+      .then(function () {
+        btn.textContent = 'Enviado ✓';
+        feedback.textContent = 'Pronto, ' + nome.split(' ')[0] + '! Um consultor da Saga entrará em contato em breve via WhatsApp.';
+        feedback.className = 'sell-card__feedback sell-card__feedback--ok';
+      })
+      .catch(function (err) {
+        btn.disabled    = false;
+        btn.textContent = 'Confirmar contato via WhatsApp';
+        log('callTool error:', err && err.message);
+        feedback.textContent = 'Não foi possível registrar agora. Tente novamente ou acesse primeiramaosaga.com.br.';
+        feedback.className = 'sell-card__feedback sell-card__feedback--err';
+      });
+    });
+
+    card.appendChild(btn);
+    app.appendChild(card);
+  }
+
+  /* ── Render: modo compra ── */
 
   function renderEmpty(message) {
     var app = document.getElementById('app');
@@ -87,7 +244,6 @@ console.log("[vehicle-offers] JS carregado");
     var article = el('article', 'vehicle-card');
     article.setAttribute('role', 'listitem');
 
-    /* Image */
     var imgWrap = el('div', 'vehicle-image');
     if (imageUrl) {
       var img = document.createElement('img');
@@ -103,7 +259,6 @@ console.log("[vehicle-offers] JS carregado");
     }
     article.appendChild(imgWrap);
 
-    /* Body */
     var body = el('div', 'vehicle-body');
 
     if (brand) {
@@ -135,9 +290,7 @@ console.log("[vehicle-offers] JS carregado");
 
     article.appendChild(body);
 
-    /* Actions */
     var actions = el('div', 'vehicle-actions');
-
     if (linkUrl) {
       var linkBtn = el('a', 'btn btn--secondary');
       linkBtn.setAttribute('href', linkUrl);
@@ -146,37 +299,33 @@ console.log("[vehicle-offers] JS carregado");
       linkBtn.appendChild(txt('Ver no site'));
       actions.appendChild(linkBtn);
     }
-
     article.appendChild(actions);
     return article;
   }
 
   function render(sc) {
+    if (sc.mode === 'sell') { renderSell(sc); return; }
+
     log('render | type=' + sc.type + ' | vehicles=' + (sc.vehicles ? sc.vehicles.length : 0));
     var app = document.getElementById('app');
     if (!app) { log('ERRO: #app não encontrado'); return; }
     app.innerHTML = '';
 
     var vehicles = Array.isArray(sc.vehicles) ? sc.vehicles : (Array.isArray(sc.offers) ? sc.offers : []);
-    log('vehicles array length=' + vehicles.length);
+    log('vehicles length=' + vehicles.length);
 
-    if (!vehicles.length) {
-      renderEmpty('Nenhum veículo encontrado para essa busca.');
-      return;
-    }
+    if (!vehicles.length) { renderEmpty('Nenhum veículo encontrado para essa busca.'); return; }
 
     var grid = el('div', 'vehicle-grid');
     grid.setAttribute('role', 'list');
-
     for (var i = 0; i < vehicles.length; i++) {
-      var v = vehicles[i];
-      if (!v || typeof v !== 'object') continue;
-      grid.appendChild(buildCard(v));
+      if (vehicles[i] && typeof vehicles[i] === 'object') grid.appendChild(buildCard(vehicles[i]));
     }
-
     app.appendChild(grid);
     log('renderizado | ' + vehicles.length + ' cards');
   }
+
+  /* ── Init ── */
 
   var _rendered = false;
 
@@ -196,36 +345,24 @@ console.log("[vehicle-offers] JS carregado");
     var sc = extractStructuredContent(payload);
     log('structuredContent inicial', sc);
 
-    if (sc) {
-      tryRender(sc);
-      return;
-    }
+    if (sc) { tryRender(sc); return; }
 
-    /* postMessage — ouve mensagens do host */
     window.addEventListener('message', function (event) {
-      console.log('[vehicle-offers] postMessage recebido | origin=' + event.origin, event.data);
+      console.log('[vehicle-offers] postMessage | origin=' + event.origin, event.data);
       var scFromMessage = extractStructuredContent(event.data);
       if (scFromMessage) tryRender(scFromMessage);
     });
 
-    /* Polling — toolOutput pode ser injetado após DOMContentLoaded */
     var attempts = 0;
     var timer = setInterval(function () {
       attempts++;
-      var payload2 = getToolOutput();
-      console.log('[vehicle-offers] polling', attempts, payload2);
-      var sc2 = extractStructuredContent(payload2);
-      if (sc2) {
-        clearInterval(timer);
-        tryRender(sc2);
-        return;
-      }
+      var p2 = getToolOutput();
+      console.log('[vehicle-offers] polling', attempts, p2);
+      var sc2 = extractStructuredContent(p2);
+      if (sc2) { clearInterval(timer); tryRender(sc2); return; }
       if (attempts >= 50) {
         clearInterval(timer);
-        if (!_rendered) {
-          log('timeout — sem dados após 5s');
-          renderEmpty('Não recebi os dados dos veículos.');
-        }
+        if (!_rendered) { log('timeout'); renderEmpty('Não recebi os dados. Tente novamente.'); }
       }
     }, 100);
   }

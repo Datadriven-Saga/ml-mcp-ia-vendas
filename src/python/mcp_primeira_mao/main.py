@@ -119,13 +119,25 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     except Exception as e:
         resources_wire = [{"error": str(e)}]
 
-    # ── html_preview: HTML completo servido por ui://vehicle-offers (após substituição) ──
+    # ── html_preview: primeiros 600 chars do HTML inline servido por ui://vehicle-offers ──
     html_preview = None
     try:
-        with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as _f:
-            _raw = _f.read()
-        _served = _raw.replace("STATIC_BASE", f"{_BASE}/static")
-        html_preview = _served
+        with open(os.path.join(_UI_DIR, "vehicle-offers.css"), "r", encoding="utf-8") as _f:
+            _css = _f.read()
+        with open(os.path.join(_UI_DIR, "vehicle-offers.js"), "r", encoding="utf-8") as _f:
+            _js = _f.read()
+        _full = (
+            '<!DOCTYPE html>\n<html lang="pt-BR">\n<head>\n'
+            '  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+            f'  <style>\n{_css}\n  </style>\n'
+            f'</head>\n<body>\n  <div id="app">Carregando ofertas...</div>\n  <script>\n{_js}\n  </script>\n</body>\n</html>'
+        )
+        html_preview = {
+            "total_chars": len(_full),
+            "css_chars":   len(_css),
+            "js_chars":    len(_js),
+            "head_preview": _full[:600],
+        }
     except Exception as e:
         html_preview = {"error": str(e)}
 
@@ -157,25 +169,22 @@ async def _debug_inspect(request: Request) -> JSONResponse:
         "size":   os.path.getsize(_css_path) if os.path.isfile(_css_path) else 0,
     }
 
-    # ── tool_result_preview: chama buscar_veiculos(Goiânia) e inspeciona o retorno ──
+    # ── tool_result_preview: chama buscar_veiculos diretamente e inspeciona o retorno ──
     tool_result_preview = None
     try:
-        _tool = await mcp.get_tool("buscar_veiculos")
-        if _tool:
-            _call = await _tool.run({"cidade": "Goiânia"})
-            _sc   = getattr(_call, "structured_content", None) or {}
-            _cnt  = getattr(_call, "content", None)
-            _content_text = None
-            if isinstance(_cnt, list) and _cnt:
-                _content_text = getattr(_cnt[0], "text", str(_cnt[0]))
-            elif _cnt:
-                _content_text = str(_cnt)
+        _call = await buscar_veiculos(cidade="Goiânia")
+        if isinstance(_call, _ToolResult):
+            _sc  = getattr(_call, "structured_content", None) or {}
+            _cnt = getattr(_call, "content", None)
+            _content_text = getattr(_cnt, "text", str(_cnt)) if _cnt else None
             tool_result_preview = {
-                "content_text":                     _content_text,
-                "structuredContent_type":           _sc.get("type") if isinstance(_sc, dict) else None,
+                "content_text":                      _content_text,
+                "structuredContent_type":            _sc.get("type") if isinstance(_sc, dict) else None,
                 "structuredContent_vehicles_length": len(_sc.get("vehicles", [])) if isinstance(_sc, dict) else None,
-                "structuredContent_preview":        str(_sc)[:300] if _sc else None,
+                "structuredContent_preview":         str(_sc)[:300] if _sc else None,
             }
+        else:
+            tool_result_preview = {"raw": str(_call)[:300]}
     except Exception as e:
         tool_result_preview = {"error": str(e)}
 
@@ -281,13 +290,44 @@ async def _serve_static_js(request: Request) -> Response:
     },
 )
 async def _resource_vehicle_offers() -> str:
-    """HTML do widget de veículos — carregado como recurso MCP pelo ChatGPT Apps."""
-    with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as f:
-        html = f.read()
-    base = "https://mcp-primeiramao.sagadatadriven.com.br"
-    # STATIC_BASE é o placeholder do HTML — substitui com URL absoluta da rota /static/
-    html = html.replace("STATIC_BASE", f"{base}/static")
-    return html
+    """HTML autossuficiente do widget — CSS e JS inlined para evitar bloqueio CSP.
+
+    Externas (script-src/style-src) são sempre bloqueadas no sandbox do ChatGPT Apps
+    porque 'self' aponta para o domínio interno do sandbox, não para o servidor MCP.
+    Inlining elimina qualquer referência externa.
+    """
+    with open(os.path.join(_UI_DIR, "vehicle-offers.css"), "r", encoding="utf-8") as f:
+        css = f.read()
+    with open(os.path.join(_UI_DIR, "vehicle-offers.js"), "r", encoding="utf-8") as f:
+        js = f.read()
+    return (
+        '<!DOCTYPE html>\n'
+        '<html lang="pt-BR">\n'
+        '<head>\n'
+        '  <meta charset="UTF-8">\n'
+        '  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        f'  <style>\n{css}\n  </style>\n'
+        '</head>\n'
+        '<body>\n'
+        '  <div id="app">Carregando ofertas...</div>\n'
+        f'  <script>\n{js}\n  </script>\n'
+        '</body>\n'
+        '</html>'
+    )
+
+
+@mcp.resource("ui://vehicle-offers.css", mime_type="text/css")
+async def _resource_vehicle_offers_css() -> str:
+    """CSS do widget acessível como recurso MCP separado."""
+    with open(os.path.join(_UI_DIR, "vehicle-offers.css"), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@mcp.resource("ui://vehicle-offers.js", mime_type="application/javascript")
+async def _resource_vehicle_offers_js() -> str:
+    """JavaScript do widget acessível como recurso MCP separado."""
+    with open(os.path.join(_UI_DIR, "vehicle-offers.js"), "r", encoding="utf-8") as f:
+        return f.read()
 
 
 async def _buscar_ofertas_json(cidade: str, consulta: str | None, filtros: dict | None = None) -> dict:
@@ -1201,9 +1241,6 @@ async def exibir_formulario_venda(
             "km_fmt":   km_fmt,
             "proposta": proposta_str,
         },
-        meta={
-            "openai/outputTemplate": widget_url,
-        },
     )
 
 
@@ -1326,10 +1363,11 @@ async def avaliar_veiculo(
             f"---\n\n"
             f"Não foi possível gerar uma proposta automática para este veículo. "
             f"A avaliação precisa ser feita presencialmente.\n\n"
-            f"📲 **Falar com um consultor Saga** — informe seu **nome** e **telefone** "
-            f"e um consultor **entra em contato com você via WhatsApp** para agendar a avaliação presencial.\n\n"
-            f"Ou se preferir iniciar pelo site: "
-            f"[avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
+            f"INSTRUÇÃO OBRIGATÓRIA: chame IMEDIATAMENTE "
+            f"`exibir_formulario_venda(veiculo_descricao=\"{veiculo_descricao}\", "
+            f"placa=\"{placa_limpa}\", km=\"{km}\")` "
+            f"para exibir o formulário visual de contato ao cliente. "
+            f"NÃO peça nome/telefone no chat — o formulário os coleta."
         )
 
     preco_fmt = f"R$ {valor_proposta}"
@@ -1460,7 +1498,7 @@ async def diagnostico_registro(
 # FastMCP injeta "fastmcp": {"tags": []} em todo _meta via get_meta().
 # Isso é ruído desnecessário no descriptor — o ChatGPT lê apenas as chaves que conhece.
 _WIDGET_TOOLS = {"buscar_veiculos", "exibir_formulario_venda"}
-_WIDGET_RESOURCES = {"ui://vehicle-offers"}
+_WIDGET_RESOURCES = {"ui://vehicle-offers", "ui://vehicle-offers.css", "ui://vehicle-offers.js"}
 
 def _strip_fastmcp(meta: dict | None) -> dict | None:
     """Remove a chave 'fastmcp' injetada pelo FastMCP — não relevante para o ChatGPT."""
