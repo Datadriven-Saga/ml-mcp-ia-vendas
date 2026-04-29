@@ -130,20 +130,15 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     except Exception as e:
         buscar_detail = {"error": str(e)}
 
-    # ── Wire format: o que tools/list envia de fato ao ChatGPT ──
+    # ── Wire format: chama _list_tools_mcp patcheado (o que ChatGPT recebe) ──
     wire_out = []
     try:
-        tools = await mcp.list_tools()
-        for t in (tools or []):
-            try:
-                mcp_tool   = t.to_mcp_tool()
-                dumped     = mcp_tool.model_dump(exclude_none=False)
-                wire_out.append({
-                    "name":  dumped.get("name"),
-                    "_meta": dumped.get("_meta"),
-                })
-            except Exception as ex:
-                wire_out.append({"name": t.name, "wire_error": str(ex)})
+        wire_tools = await mcp._list_tools_mcp(None)
+        for t in (wire_tools or []):
+            wire_out.append({
+                "name":  t.name,
+                "_meta": getattr(t, "_meta", None),
+            })
     except Exception as e:
         wire_out = [{"error": str(e)}]
 
@@ -1410,6 +1405,43 @@ async def diagnostico_registro(
         "dealer_id": resultado.get("dealer_id"),
         "response":  resultado.get("response"),
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# WORKAROUND: FastMCP 3.x armazena Tool.meta corretamente mas
+# to_mcp_tool() não o serializa → _meta chega null no tools/list.
+# ChatGPT nunca vê openai/outputTemplate e ignora o widget.
+#
+# Fix: wrap de _list_tools_mcp para injetar _meta após a serialização.
+# _list_tools_mcp é chamado via self na closure do _mcp_server, então
+# substituir o atributo na instância é suficiente.
+# ─────────────────────────────────────────────────────────────
+
+_TOOL_META_REGISTRY: dict = {
+    "buscar_veiculos": {
+        "openai/outputTemplate": "ui://vehicle-offers",
+        "ui": {"resourceUri": "ui://vehicle-offers"},
+    },
+    "exibir_formulario_venda": {
+        "openai/outputTemplate": "ui://vehicle-offers",
+        "ui": {"resourceUri": "ui://vehicle-offers"},
+    },
+}
+
+_orig_list_tools_mcp = mcp._list_tools_mcp
+
+
+async def _list_tools_mcp_with_meta(*args, **kwargs):
+    result = await _orig_list_tools_mcp(*args, **kwargs)
+    for tool in result or []:
+        meta = _TOOL_META_REGISTRY.get(tool.name)
+        if meta:
+            tool._meta = meta
+    return result
+
+
+mcp._list_tools_mcp = _list_tools_mcp_with_meta
+logger.info(f"[meta-patch] _list_tools_mcp patched → tools com _meta: {list(_TOOL_META_REGISTRY.keys())}")
 
 
 if __name__ == "__main__":
