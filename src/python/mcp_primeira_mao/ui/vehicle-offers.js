@@ -12,26 +12,26 @@ console.log("[vehicle-offers] inline JS carregado");
   }
 
   function getToolOutput() {
-    if (window.openai && window.openai.toolOutput)        return window.openai.toolOutput;
-    if (window.openai && window.openai.toolResponse)      return window.openai.toolResponse;
-    if (window.openai && window.openai.structuredContent) return { structuredContent: window.openai.structuredContent };
-    return null;
+    return (window.openai && window.openai.toolOutput) ? window.openai.toolOutput : null;
   }
 
   function extractStructuredContent(payload) {
     if (!payload) return null;
-    // compra
-    if (payload.type === 'vehicle_cards') return payload;
-    // venda
-    if (payload.mode === 'sell') return payload;
-    // aninhado em structuredContent
+    // payload direto: { type, vehicles } ou { mode: 'sell' }
+    if (payload.type === 'vehicle_cards' || payload.mode === 'sell') return payload;
+    // toolOutput: { structuredContent: { type, vehicles } }
     var sc = payload.structuredContent;
-    if (sc) {
-      if (sc.type === 'vehicle_cards' || sc.mode === 'sell') return sc;
-    }
-    // aninhado em params.structuredContent (postMessage)
+    if (sc && (sc.type === 'vehicle_cards' || sc.mode === 'sell')) return sc;
+    // postMessage: { params: { structuredContent: … } }
     var psc = payload.params && payload.params.structuredContent;
     if (psc && (psc.type === 'vehicle_cards' || psc.mode === 'sell')) return psc;
+    // postMessage: { toolOutput: { structuredContent: … } } ou { toolOutput: { type, … } }
+    var to = payload.toolOutput;
+    if (to) {
+      if (to.type === 'vehicle_cards' || to.mode === 'sell') return to;
+      var tosc = to.structuredContent;
+      if (tosc && (tosc.type === 'vehicle_cards' || tosc.mode === 'sell')) return tosc;
+    }
     return null;
   }
 
@@ -337,18 +337,13 @@ console.log("[vehicle-offers] inline JS carregado");
 
   function init() {
     log('DOMContentLoaded');
-    log('window.openai', window.openai);
-    log('toolOutput', window.openai && window.openai.toolOutput);
+    var output = getToolOutput();
+    console.log('[vehicle-offers] toolOutput', output);
 
-    var payload = getToolOutput();
-    log('payload inicial', payload);
-    var sc = extractStructuredContent(payload);
-    log('structuredContent inicial', sc);
-
+    var sc = extractStructuredContent(output);
     if (sc) { tryRender(sc); return; }
 
     window.addEventListener('message', function (event) {
-      console.log('[vehicle-offers] postMessage | origin=' + event.origin, event.data);
       var scFromMessage = extractStructuredContent(event.data);
       if (scFromMessage) tryRender(scFromMessage);
     });
@@ -357,7 +352,6 @@ console.log("[vehicle-offers] inline JS carregado");
     var timer = setInterval(function () {
       attempts++;
       var p2 = getToolOutput();
-      console.log('[vehicle-offers] polling', attempts, p2);
       var sc2 = extractStructuredContent(p2);
       if (sc2) { clearInterval(timer); tryRender(sc2); return; }
       if (attempts >= 50) {
