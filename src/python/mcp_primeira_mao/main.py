@@ -215,6 +215,15 @@ async def _serve_ui_css(request: Request) -> Response:
 async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
+# Rotas /static/ — usadas pelo resource ui://vehicle-offers (sem CSP meta inline)
+@mcp.custom_route("/static/vehicle-offers.css", methods=["GET"])
+async def _serve_static_css(request: Request) -> Response:
+    return _serve_ui_file("vehicle-offers.css")
+
+@mcp.custom_route("/static/vehicle-offers.js", methods=["GET"])
+async def _serve_static_js(request: Request) -> Response:
+    return _serve_ui_file("vehicle-offers.js")
+
 
 @mcp.resource(
     "ui://vehicle-offers",
@@ -238,12 +247,8 @@ async def _resource_vehicle_offers() -> str:
     with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as f:
         html = f.read()
     base = "https://mcp-primeiramao.sagadatadriven.com.br"
-    html = html.replace('href="vehicle-offers.css"', f'href="{base}/ui/vehicle-offers.css"')
-    html = html.replace('src="vehicle-offers.js"',   f'src="{base}/ui/vehicle-offers.js"')
-    html = html.replace(
-        "connect-src 'self';",
-        f"connect-src 'self' {base};",
-    )
+    # STATIC_BASE é o placeholder do HTML — substitui com URL absoluta da rota /static/
+    html = html.replace("STATIC_BASE", f"{base}/static")
     return html
 
 

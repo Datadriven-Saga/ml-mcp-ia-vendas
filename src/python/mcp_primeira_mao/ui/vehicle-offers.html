@@ -3,30 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <!--
-    CSP via meta como fallback.
-    Quando servido pelo FastMCP (custom_route), o header HTTP tem precedência.
-    Com arquivos separados: NÃO precisamos de 'unsafe-inline' em script-src ou style-src.
-  -->
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none';
-                 script-src 'self';
-                 style-src 'self';
-                 img-src https: data:;
-                 connect-src 'self';
-                 frame-ancestors https://chatgpt.com https://*.chatgpt.com
-                                  https://chat.openai.com https://*.chat.openai.com 'self';">
   <title>Ofertas Saga</title>
-  <link rel="stylesheet" href="vehicle-offers.css">
+  <!--
+    Sem <meta http-equiv="Content-Security-Policy"> aqui.
+    Quando servido via ui://, o ChatGPT Apps aplica a CSP do openai/widgetCSP
+    do resource _meta. Um meta CSP com 'self' bloquearia CSS/JS externos.
+  -->
+  <link rel="stylesheet" href="STATIC_BASE/vehicle-offers.css">
 </head>
 <body>
 
   <!--
     SVG Sprite — ícones definidos uma vez no HTML, referenciados via <use> pelo JS.
     Inline SVG é conteúdo, não script ou estilo — não viola CSP.
-    Os ícones NUNCA são gerados a partir de dados externos.
   -->
-  <svg id="icon-defs" aria-hidden="true" focusable="false">
+  <svg id="icon-defs" aria-hidden="true" focusable="false" style="display:none">
     <defs>
 
       <symbol id="ic-door" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -67,13 +58,6 @@
         <polyline points="20 6 9 17 4 12"/>
       </symbol>
 
-      <symbol id="ic-download" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="8 17 12 21 16 17"/>
-        <line x1="12" y1="12" x2="12" y2="21"/>
-        <path d="M20.88 18.09A5 5 0 0018 9h-1.26A8 8 0 103 16.29"/>
-      </symbol>
-
       <symbol id="ic-external" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
@@ -84,7 +68,7 @@
     </defs>
   </svg>
 
-  <!-- ── Raiz da aplicação ── -->
+  <!-- Raiz da aplicação -->
   <div id="app">
 
     <!-- Estado: Carregando -->
@@ -97,18 +81,16 @@
     <div id="s-err" hidden role="alert" aria-atomic="true">
       <span class="state-emoji" aria-hidden="true">⚠️</span>
       <p class="state-title">Não foi possível carregar</p>
-      <!-- Mensagem de erro vem de mensagens internas genéricas — nunca do backend -->
       <p class="state-desc" id="err-msg">Tente novamente em instantes.</p>
       <button class="btn-retry" id="btn-retry" type="button">Tentar novamente</button>
     </div>
 
-    <!-- Estado: Venda (avaliação + formulário de contato) -->
+    <!-- Estado: Venda -->
     <div id="s-sell" hidden>
       <header id="sell-header" role="banner">
         <div class="hdr-period" id="sell-period"></div>
         <div class="hdr-agency" id="sell-agency"></div>
       </header>
-      <!-- Card de avaliação + formulário injetados pelo JS -->
       <div id="sell-body"></div>
     </div>
 
@@ -121,21 +103,16 @@
 
     <!-- Estado: Principal -->
     <div id="s-main" hidden>
-
       <header id="widget-header" role="banner">
-        <!-- Preenchido via textContent pelo JS — nunca innerHTML -->
         <div class="hdr-period" id="hdr-period"></div>
         <div class="hdr-agency" id="hdr-agency"></div>
       </header>
-
       <div id="count-bar" aria-live="polite" aria-atomic="true"></div>
-
-      <div class="carousel-outer" role="region" aria-label="Carrossel de ofertas de veículos">
+      <div class="carousel-outer" role="region" aria-label="Carrossel de ofertas">
         <button class="nav-btn nav-prev" id="btn-prev" type="button"
                 aria-label="Oferta anterior" disabled>
           <span aria-hidden="true">‹</span>
         </button>
-        <!-- Cards injetados pelo JS via DOM API — nunca innerHTML com dados externos -->
         <div class="carousel-track" id="track"
              role="list" aria-label="Lista de ofertas de veículos"></div>
         <button class="nav-btn nav-next" id="btn-next" type="button"
@@ -143,20 +120,15 @@
           <span aria-hidden="true">›</span>
         </button>
       </div>
-
       <div id="dots-bar" aria-hidden="true" role="presentation"></div>
-
-    </div><!-- /#s-main -->
+    </div>
 
   </div><!-- /#app -->
 
-  <!--
-    Painel de debug — visível apenas com ?debug=1 na URL.
-    DOM-only: nenhum dado externo via innerHTML.
-  -->
+  <!-- Painel de debug — visível apenas com ?debug=1 -->
   <div id="dbg" hidden aria-label="Painel de debug">
     <div id="dbg-hdr">
-      <span>🔧 DEBUG — tool calls &amp; dados</span>
+      <span>🔧 DEBUG</span>
       <span>
         <button id="dbg-clear" type="button">limpar</button>
         <button id="dbg-close" type="button">✕</button>
@@ -165,10 +137,7 @@
     <div id="dbg-body"></div>
   </div>
 
-  <!--
-    Script externo — não usa 'unsafe-inline'.
-    Carregado após o DOM estar pronto (script no final do body).
-  -->
-  <script src="vehicle-offers.js"></script>
+  <!-- JS externo com defer — sem inline, sem unsafe-inline -->
+  <script src="STATIC_BASE/vehicle-offers.js" defer></script>
 </body>
 </html>
