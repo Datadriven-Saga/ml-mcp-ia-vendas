@@ -460,7 +460,7 @@ async def _buscar_ofertas_json(cidade: str, consulta: str | None, filtros: dict 
     )
 
     logger.info(f"[/api/ofertas] cidade='{cidade}' | fonte={fonte} | veículos={len(cards)}")
-    return {"vehicles": cards, "searchContext": {"store": ", ".join(nomes_lojas), "city": cidade.upper()}}
+    return {"type": "vehicle_cards", "vehicles": cards, "searchContext": {"store": ", ".join(nomes_lojas), "city": cidade.upper()}}
 
 
 @mcp.custom_route("/api/ofertas", methods=["GET"])
@@ -555,6 +555,21 @@ async def _local_registrar_compra(request: Request) -> Response:
         observacao       = body.get("observacao"),
     )
     return JSONResponse(result)
+
+
+@mcp.custom_route("/local/test", methods=["GET"])
+async def _local_test_widget(request: Request) -> Response:
+    """Página de teste visual do widget — abre no navegador em http://localhost:8000/local/test"""
+    if not _local_guard(request):
+        return Response(status_code=403)
+    path = os.path.join(_UI_DIR, "test_widget.html")
+    if not os.path.isfile(path):
+        return Response(status_code=404)
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    # Sem CSP restritivo — rota acessível apenas de localhost
+    return Response(content=content, media_type="text/html; charset=utf-8",
+                    headers={"Cache-Control": "no-store"})
 
 
 @mcp.custom_route("/local/registrar-venda", methods=["POST"])

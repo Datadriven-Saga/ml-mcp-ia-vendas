@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Widget Test</title>
+  <style>
+    body { margin: 0; background: #0f1115; font-family: sans-serif; color: #fff; }
+    .controls {
+      position: fixed; top: 0; left: 0; right: 0;
+      background: #1a1a2e; border-bottom: 1px solid #333;
+      padding: 10px 16px; display: flex; gap: 10px; flex-wrap: wrap;
+      align-items: center; z-index: 999;
+    }
+    .controls label { font-size: 12px; color: #9a9a9a; }
+    .controls input, .controls select {
+      background: #111; border: 1px solid #444; color: #fff;
+      padding: 5px 8px; border-radius: 6px; font-size: 12px;
+    }
+    .controls button {
+      background: #f2c200; color: #000; border: none;
+      padding: 6px 14px; border-radius: 20px; font-size: 12px;
+      font-weight: 700; cursor: pointer;
+    }
+    .controls button:hover { background: #d4a800; }
+    .controls button.secondary {
+      background: #fff; color: #111;
+    }
+    #widget-frame {
+      margin-top: 60px;
+      width: 420px;
+      height: 600px;
+      border: none;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .status { font-size: 11px; color: #666; }
+    .status.ok { color: #69db7c; }
+    .status.err { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+
+<div class="controls">
+  <div>
+    <label>Modo</label><br>
+    <select id="mode-sel">
+      <option value="buy">Compra (carrossel)</option>
+      <option value="sell">Venda (formulário)</option>
+    </select>
+  </div>
+
+  <!-- Buy params -->
+  <div id="buy-params">
+    <label>Cidade</label><br>
+    <input id="cidade" value="Goiânia" style="width:120px">
+  </div>
+  <div id="buy-params2">
+    <label>Filtro (opcional)</label><br>
+    <input id="consulta" placeholder="ex: honda civic" style="width:150px">
+  </div>
+
+  <!-- Sell params -->
+  <div id="sell-params" style="display:none">
+    <label>Veículo</label><br>
+    <input id="veiculo" value="Honda Civic Touring 2021" style="width:180px">
+  </div>
+  <div id="sell-params2" style="display:none">
+    <label>Placa</label><br>
+    <input id="placa" value="ABC1D23" style="width:90px">
+  </div>
+  <div id="sell-params3" style="display:none">
+    <label>KM</label><br>
+    <input id="km" value="32000" style="width:80px">
+  </div>
+  <div id="sell-params4" style="display:none">
+    <label>Proposta (R$)</label><br>
+    <input id="proposta" value="89900" style="width:90px">
+  </div>
+
+  <div>
+    <br>
+    <button onclick="loadWidget()">Carregar</button>
+    &nbsp;
+    <button class="secondary" onclick="reloadFrame()">Reload frame</button>
+  </div>
+
+  <span id="status" class="status"></span>
+</div>
+
+<!--
+  iframe aponta para vehicle-offers.html servido pelo servidor local.
+  O JS dentro do iframe lê window.openai.toolOutput para renderizar.
+  Após carregar, injetamos os dados via postMessage simulando o ChatGPT.
+-->
+<iframe id="widget-frame" src="about:blank" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+
+<script>
+  // Quando servido pelo próprio servidor (/local/test), usa URL relativa.
+  // Quando aberto como file://, usa localhost:8000.
+  var BASE = (location.protocol === 'file:') ? 'http://localhost:8000' : '';
+
+  var modeSel = document.getElementById('mode-sel');
+  modeSel.addEventListener('change', toggleParams);
+
+  function toggleParams() {
+    var isBuy = modeSel.value === 'buy';
+    ['buy-params','buy-params2'].forEach(function(id) {
+      document.getElementById(id).style.display = isBuy ? '' : 'none';
+    });
+    ['sell-params','sell-params2','sell-params3','sell-params4'].forEach(function(id) {
+      document.getElementById(id).style.display = isBuy ? 'none' : '';
+    });
+    document.getElementById('widget-frame').height = isBuy ? '600' : '380';
+  }
+
+  function setStatus(msg, type) {
+    var el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = 'status' + (type ? ' ' + type : '');
+  }
+
+  async function loadWidget() {
+    setStatus('Carregando…');
+    var mode = modeSel.value;
+    var url;
+
+    if (mode === 'buy') {
+      var cidade   = document.getElementById('cidade').value.trim() || 'Goiânia';
+      var consulta = document.getElementById('consulta').value.trim();
+      url = BASE + '/local/ofertas?cidade=' + encodeURIComponent(cidade);
+      if (consulta) url += '&consulta=' + encodeURIComponent(consulta);
+    } else {
+      var veiculo  = document.getElementById('veiculo').value.trim();
+      var placa    = document.getElementById('placa').value.trim();
+      var km       = document.getElementById('km').value.trim();
+      var proposta = document.getElementById('proposta').value.trim();
+      url = BASE + '/local/formulario-venda'
+          + '?veiculo='  + encodeURIComponent(veiculo)
+          + '&placa='    + encodeURIComponent(placa)
+          + '&km='       + encodeURIComponent(km)
+          + '&proposta=' + encodeURIComponent(proposta);
+    }
+
+    var data;
+    try {
+      var resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      data = await resp.json();
+      setStatus('JSON carregado — injetando no widget…', 'ok');
+    } catch (e) {
+      setStatus('Erro: ' + e.message + ' — servidor rodando?', 'err');
+      return;
+    }
+
+    // Monta HTML do widget com dados embutidos no #vehicle-data
+    var widgetHtml = await fetchWidgetHtml(data);
+    var frame = document.getElementById('widget-frame');
+    frame.srcdoc = widgetHtml;
+    setStatus('Widget renderizado', 'ok');
+  }
+
+  async function fetchWidgetHtml(data) {
+    // Busca o CSS e JS do servidor local
+    var cssResp = await fetch(BASE + '/ui/vehicle-offers.css');
+    var css = await cssResp.text();
+    var jsResp  = await fetch(BASE + '/ui/vehicle-offers.js');
+    var js  = await jsResp.text();
+
+    var json = JSON.stringify(data);
+
+    return '<!DOCTYPE html><html lang="pt-BR"><head>'
+      + '<meta charset="UTF-8">'
+      + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+      + '<style>' + css + '</style>'
+      + '</head><body>'
+      + '<div id="app"></div>'
+      + '<script type="application/json" id="vehicle-data">' + json + '<\/script>'
+      + '<script>' + js + '<\/script>'
+      + '</body></html>';
+  }
+
+  function reloadFrame() {
+    var frame = document.getElementById('widget-frame');
+    frame.srcdoc = frame.srcdoc;
+  }
+
+  // Carregar automaticamente ao abrir
+  window.addEventListener('load', loadWidget);
+</script>
+
+</body>
+</html>

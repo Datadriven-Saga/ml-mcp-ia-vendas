@@ -139,18 +139,24 @@ console.log("[vehicle-offers] inline JS carregado");
     if (!app) { log('ERRO: #app não encontrado'); return; }
     app.innerHTML = '';
 
+    /* Centraliza o card compacto na viewport */
+    app.className = 'sell-mode';
+
     var card = el('article', 'sell-card');
 
+    /* Badge "AVALIAÇÃO" — branco com texto preto (igual ao badge de marca) */
     var badge = el('span', 'vehicle-body__brand');
     badge.appendChild(txt('AVALIAÇÃO'));
     card.appendChild(badge);
 
+    /* Nome do veículo em branco puro */
     var titleEl = el('h3', 'vehicle-body__title');
     titleEl.appendChild(txt(sc.veiculo || 'Seu veículo'));
     card.appendChild(titleEl);
 
+    /* Dados sem rótulo "Placa:" — apenas os valores em cinza */
     var specParts = [];
-    if (sc.placa) specParts.push('Placa: ' + sc.placa);
+    if (sc.placa) specParts.push(sc.placa);
     var kmStr = sc.km_fmt || fmtKm(sc.km) || '';
     if (kmStr) specParts.push(kmStr);
     if (specParts.length) {
@@ -168,6 +174,7 @@ console.log("[vehicle-offers] inline JS carregado");
       card.appendChild(price);
     }
 
+    /* Texto informativo em cinza discreto */
     var hint = el('p', 'sell-card__hint');
     hint.appendChild(txt('📲 Informe seus dados — um consultor entra em contato via WhatsApp'));
     card.appendChild(hint);
@@ -265,18 +272,23 @@ console.log("[vehicle-offers] inline JS carregado");
     renderEmpty(message || 'Carregando ofertas...');
   }
 
+  function toTitleCase(s) {
+    return String(s || '').toLowerCase().replace(/(?:^|\s)\S/g, function (c) { return c.toUpperCase(); });
+  }
+
   function buildCard(vehicle) {
-    var imageUrl  = safeUrl(vehicle.imageUrl || vehicle.url_imagem || vehicle.image || vehicle.foto || '');
-    var linkUrl   = safeUrl(vehicle.link || vehicle.url || '');
-    var title     = vehicle.title || [vehicle.brand || vehicle.marca, vehicle.model || vehicle.modelo].filter(Boolean).join(' ') || 'Veículo';
-    var brand     = vehicle.brand || vehicle.marca || '';
-    var year      = vehicle.year || vehicle.model_year || '';
-    var km        = fmtKm(vehicle.kmFormatted || vehicle.km);
-    var location  = vehicle.location || vehicle.store || [vehicle.loja, vehicle.cidade].filter(Boolean).join(' — ') || '';
+    var imageUrl = safeUrl(vehicle.imageUrl || vehicle.url_imagem || vehicle.image || vehicle.foto || '');
+    var linkUrl  = safeUrl(vehicle.link || vehicle.url || '');
+    var title    = vehicle.title || [vehicle.brand || vehicle.marca, vehicle.model || vehicle.modelo].filter(Boolean).join(' ') || 'Veículo';
+    var brand    = vehicle.brand || vehicle.marca || '';
+    var year     = vehicle.year || vehicle.model_year || '';
+    var km       = fmtKm(vehicle.kmFormatted || vehicle.km);
+    var location = vehicle.location || vehicle.store || [vehicle.loja, vehicle.cidade].filter(Boolean).join(' — ') || '';
 
     var article = el('article', 'vehicle-card');
     article.setAttribute('role', 'listitem');
 
+    /* ── Imagem ── */
     var imgWrap = el('div', 'vehicle-image');
     if (imageUrl) {
       var img = document.createElement('img');
@@ -292,6 +304,7 @@ console.log("[vehicle-offers] inline JS carregado");
     }
     article.appendChild(imgWrap);
 
+    /* ── Corpo ── */
     var body = el('div', 'vehicle-body');
 
     if (brand) {
@@ -304,7 +317,8 @@ console.log("[vehicle-offers] inline JS carregado");
     titleEl.appendChild(txt(title));
     body.appendChild(titleEl);
 
-    var specParts = [year ? 'Ano: ' + year : null, km || null].filter(Boolean);
+    /* Ano sem prefixo "Ano: " */
+    var specParts = [year || null, km || null].filter(Boolean);
     if (specParts.length) {
       var specs = el('p', 'vehicle-body__specs');
       specs.appendChild(txt(specParts.join(' • ')));
@@ -323,7 +337,9 @@ console.log("[vehicle-offers] inline JS carregado");
 
     article.appendChild(body);
 
+    /* ── Botões de ação (ocultados quando o formulário abre) ── */
     var actions = el('div', 'vehicle-actions');
+
     if (linkUrl) {
       var linkBtn = el('a', 'btn btn--secondary');
       linkBtn.setAttribute('href', linkUrl);
@@ -333,13 +349,14 @@ console.log("[vehicle-offers] inline JS carregado");
       actions.appendChild(linkBtn);
     }
 
-    /* ── Botão de interesse ── */
-    var interestWrap = el('div', 'interest-wrap');
-
     var interestBtn = el('button', 'btn btn--primary');
     interestBtn.setAttribute('type', 'button');
     interestBtn.appendChild(txt('Tenho interesse'));
+    actions.appendChild(interestBtn);
 
+    article.appendChild(actions);
+
+    /* ── Formulário de interesse — substitui os botões neste card apenas ── */
     var interestForm = el('div', 'interest-form');
 
     var iNameInput = el('input', 'sell-form__input');
@@ -364,7 +381,7 @@ console.log("[vehicle-offers] inline JS carregado");
 
     var iFeedback = el('div', 'sell-card__feedback');
 
-    var iSubmit = el('button', 'btn btn--primary');
+    var iSubmit = el('button', 'btn btn--primary sell-form__btn');
     iSubmit.setAttribute('type', 'button');
     iSubmit.appendChild(txt('Confirmar via WhatsApp'));
 
@@ -375,9 +392,13 @@ console.log("[vehicle-offers] inline JS carregado");
     interestForm.appendChild(iFeedback);
     interestForm.appendChild(iSubmit);
 
+    /* Clique em "Tenho interesse": abre o form em TODOS os cards do carrossel */
     interestBtn.addEventListener('click', function () {
-      interestBtn.style.display = 'none';
-      interestForm.style.display = 'flex';
+      var track = article.closest('.vehicle-carousel') || article.parentNode;
+      var allActions = track.querySelectorAll('.vehicle-actions');
+      var allForms   = track.querySelectorAll('.interest-form');
+      for (var i = 0; i < allActions.length; i++) allActions[i].style.display = 'none';
+      for (var i = 0; i < allForms.length; i++)   allForms[i].style.display   = 'flex';
       iNameInput.focus();
     });
 
@@ -424,11 +445,7 @@ console.log("[vehicle-offers] inline JS carregado");
       });
     });
 
-    interestWrap.appendChild(interestBtn);
-    interestWrap.appendChild(interestForm);
-    actions.appendChild(interestWrap);
-
-    article.appendChild(actions);
+    article.appendChild(interestForm);
     return article;
   }
 
@@ -443,6 +460,14 @@ console.log("[vehicle-offers] inline JS carregado");
     var vehicles = Array.isArray(sc.vehicles) ? sc.vehicles : (Array.isArray(sc.offers) ? sc.offers : []);
     if (!vehicles.length) { renderEmpty('Nenhum veículo encontrado para essa busca.'); return; }
 
+    /* Cabeçalho dinâmico: "Veículos disponíveis em {cidade}" */
+    var cityRaw = sc.searchContext && sc.searchContext.city ? sc.searchContext.city : '';
+    if (cityRaw) {
+      var header = el('div', 'carousel-header');
+      header.appendChild(txt('Veículos disponíveis em ' + toTitleCase(cityRaw)));
+      app.appendChild(header);
+    }
+
     var wrap = el('div', 'vehicle-carousel-wrap');
 
     var track = el('div', 'vehicle-carousel');
@@ -452,94 +477,83 @@ console.log("[vehicle-offers] inline JS carregado");
     }
     wrap.appendChild(track);
 
-    var nav = el('div', 'carousel-nav');
-
-    var prevBtn = el('button', 'carousel-btn');
+    /* Setas laterais sobrepostas (estilo Localiza) */
+    var prevBtn = el('button', 'carousel-arrow carousel-arrow--prev');
     prevBtn.setAttribute('type', 'button');
     prevBtn.setAttribute('aria-label', 'Anterior');
     prevBtn.innerHTML = '&#8592;';
     prevBtn.addEventListener('click', function () {
-      track.scrollBy({ left: -280, behavior: 'smooth' });
+      track.scrollBy({ left: -300, behavior: 'smooth' });
     });
 
-    var nextBtn = el('button', 'carousel-btn');
+    var nextBtn = el('button', 'carousel-arrow carousel-arrow--next');
     nextBtn.setAttribute('type', 'button');
     nextBtn.setAttribute('aria-label', 'Próximo');
     nextBtn.innerHTML = '&#8594;';
     nextBtn.addEventListener('click', function () {
-      track.scrollBy({ left: 280, behavior: 'smooth' });
+      track.scrollBy({ left: 300, behavior: 'smooth' });
     });
 
-    nav.appendChild(prevBtn);
-    nav.appendChild(nextBtn);
-    wrap.appendChild(nav);
-
+    wrap.appendChild(prevBtn);
+    wrap.appendChild(nextBtn);
     app.appendChild(wrap);
     log('renderizado | ' + vehicles.length + ' cards');
   }
 
   /* ── Init ── */
 
-  var _rendered = false;
+  /* Rastreia a referência do último toolOutput processado.
+     Quando o ChatGPT reutiliza o mesmo iframe para uma nova consulta,
+     ele injeta um novo objeto toolOutput — a referência muda e o re-render ocorre. */
+  var _lastToolOutput = undefined;
+  var _hasRendered    = false;
 
-  function tryRender(sc) {
-    if (_rendered) return;
-    _rendered = true;
-    render(sc);
+  function renderIfChanged(out) {
+    if (out === _lastToolOutput) return;
+    _lastToolOutput = out;
+    if (!out) return;
+    var sc = extractStructuredContent(out);
+    if (sc) { render(sc); _hasRendered = true; }
   }
 
   function init() {
     log('DOMContentLoaded');
     log('window.openai', window.openai);
 
-    /* 1. window.openai.toolOutput — SEMPRE preferir sobre dados embutidos.
+    /* 1. toolOutput imediato — SEMPRE preferir sobre dados embutidos.
           toolOutput é injetado pelo ChatGPT com o structured_content da chamada atual,
           garantindo que o widget renderize o payload correto mesmo quando o HTML do
           recurso está em cache com dados de uma chamada anterior. */
-    var output = window.openai && window.openai.toolOutput;
-    log('toolOutput', output);
-    var sc = extractStructuredContent(output);
-    if (sc) { tryRender(sc); return; }
+    renderIfChanged(window.openai && window.openai.toolOutput);
 
-    /* 2. Dados embutidos — fallback para quando toolOutput ainda não chegou ou
-          o widget é aberto fora do ChatGPT Apps. */
-    var dataEl = document.getElementById('vehicle-data');
-    if (dataEl) {
-      try {
-        var embedded = JSON.parse(dataEl.textContent || dataEl.innerHTML || 'null');
-        log('embedded data', embedded);
-        var scEmbed = extractStructuredContent(embedded);
-        if (scEmbed) { tryRender(scEmbed); return; }
-      } catch (e) {
-        log('embedded data parse error', e);
+    /* 2. Dados embutidos — fallback quando toolOutput não disponível ainda */
+    if (!_hasRendered) {
+      var dataEl = document.getElementById('vehicle-data');
+      if (dataEl) {
+        try {
+          var embedded = JSON.parse(dataEl.textContent || dataEl.innerHTML || 'null');
+          log('embedded data', embedded);
+          var scEmbed = extractStructuredContent(embedded);
+          if (scEmbed) { render(scEmbed); _hasRendered = true; }
+        } catch (e) {
+          log('embedded data parse error', e);
+        }
       }
+      if (!_hasRendered) { renderLoading('Carregando ofertas...'); }
     }
 
-    renderLoading('Carregando ofertas...');
-
-    /* 3. Polling de window.openai.toolOutput por até 5s */
-    var _pollCount = 0;
-    var _pollTimer = setInterval(function () {
-      _pollCount++;
-      var out = window.openai && window.openai.toolOutput;
-      if (out) {
-        clearInterval(_pollTimer);
-        log('toolOutput via poll (tentativa ' + _pollCount + ')', out);
-        var scPoll = extractStructuredContent(out);
-        if (scPoll) { tryRender(scPoll); }
-        return;
-      }
-      if (_pollCount >= 25) {
-        clearInterval(_pollTimer);
-        log('poll encerrado sem dados após 5s');
-      }
-    }, 200);
+    /* 3. Watcher contínuo — detecta toolOutput inicial (se ainda não chegou)
+          E novas consultas na mesma sessão quando o ChatGPT reutiliza o iframe.
+          Roda indefinidamente para capturar qualquer nova chamada de ferramenta. */
+    setInterval(function () {
+      renderIfChanged(window.openai && window.openai.toolOutput);
+    }, 300);
 
     /* 4. postMessage listener */
     window.addEventListener('message', function (event) {
       log('raw message', event.data);
       var sc2 = extractStructuredContent(event.data);
-      if (sc2) tryRender(sc2);
+      if (sc2) render(sc2);
     });
   }
 
