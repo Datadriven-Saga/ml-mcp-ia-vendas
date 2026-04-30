@@ -5,7 +5,7 @@
 }
 
 :root {
-  --bg:        #ffffff;
+  --bg:        #212121;
   --card-bg:   #212121;
   --border:    rgba(255,255,255,0.09);
   --text-1:    #ffffff;
@@ -38,7 +38,7 @@ html, body {
 .carousel-header {
   font-size: 15px;
   font-weight: 600;
-  color: #111111;
+  color: var(--text-1);
   letter-spacing: -0.01em;
   margin-bottom: 14px;
   padding: 0 16px;
@@ -266,7 +266,7 @@ html, body {
   justify-content: center;
   min-height: 180px;
   font-size: 14px;
-  color: #6b7280;
+  color: var(--text-2);
   text-align: center;
   padding: 24px;
 }
